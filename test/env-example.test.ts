@@ -14,7 +14,12 @@ describe(".env.example", () => {
   it("lists the required keys", () => {
     const keys = entries.map((e) => e.key);
     expect(keys).toEqual(
-      expect.arrayContaining(["TWELVE_DATA_API_KEY", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SECRET_KEY"]),
+      expect.arrayContaining([
+        "TWELVE_DATA_API_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_SECRET_KEY",
+      ]),
     );
   });
 
@@ -22,8 +27,8 @@ describe(".env.example", () => {
     for (const e of entries) expect(e.value, e.key).toBe("");
   });
 
-  it("only exposes NEXT_PUBLIC_SUPABASE_URL to the browser", () => {
+  it("only exposes the Supabase URL and publishable key as NEXT_PUBLIC_", () => {
     const publicKeys = entries.map((e) => e.key).filter((k) => k.startsWith("NEXT_PUBLIC_"));
-    expect(publicKeys).toEqual(["NEXT_PUBLIC_SUPABASE_URL"]);
+    expect(publicKeys).toEqual(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]);
   });
 });

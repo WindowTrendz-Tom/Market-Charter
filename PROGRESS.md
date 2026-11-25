@@ -186,3 +186,32 @@
 ### P1-T9 – RLS check (run by orchestrator via Supabase Management API)
 `select relname, relrowsecurity from pg_class where relnamespace='public'::regnamespace ...` →
 candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all true).
+
+### P2-T1 – Auth foundation (awaiting review)
+
+**What changed**
+- Installed `@supabase/ssr@0.12.7` (exact).
+- `lib/config-error.ts` now holds `ConfigError` and `readEnv` (no `server-only`); `lib/env.ts` imports `readEnv` and re-exports `ConfigError`. `lib/env.test.ts` unchanged and passing.
+- New: `lib/supabase/public-config.ts`, `lib/supabase/server.ts` (`createSupabaseServerClient`, assigns to `SupabaseClient<Database>` directly, so no alias needed), `lib/supabase/proxy.ts` (`updateSession`, Supabase pattern verbatim, `getClaims()` straight after client creation), `lib/auth/session.ts` (`getAuthContext`), `lib/auth/next-path.ts`, `lib/auth/route-access.ts`, root `proxy.ts`. Tests for each non-server-only module.
+- `.env.example` gains the publishable key and optional E2E vars; `test/env-example.test.ts` updated; README "Auth" section added.
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm test`: 17 files passed, 1 skipped; 127 passed, 10 skipped; `npm run build` passes and prints `ƒ Proxy (Middleware)`.
+- `grep server-only` on the five proxy-side modules: no output. `grep -rln process.env lib app components proxy.ts` (non-test): only `lib/config-error.ts`.
+- `npm run dev` with real `.env.local`: `/chart/AAPL` -> `307 http://localhost:3000/login?next=%2Fchart%2FAAPL`; `/_next/static/x.js` -> 404 (not 307).
+
+**API credits used:** 0.
+
+**Issues / notes**
+- Signing-key type for the new project (O0, orchestrator, Management API): ES256 `in_use`, HS256 `previously_used`. No code change needed.
+
+### O0 – New Sydney project setup (orchestrator)
+- Project `oxepsjesqzpkmljajwti`, region ap-southeast-2, ACTIVE_HEALTHY. Old Japan project deleted by Tom.
+- Phase 1 migration re-applied unchanged; RLS true on candles, fetch_log, indicator_prefs, watchlist.
+- `.env.local` rewritten (URL, publishable + secret keys; values never printed). Sandbox network: new host allowed, old host removed.
+- Auth config read: disable_signup=false, password_min_length=6, email enabled, anonymous disabled, site_url=http://localhost:3000 (O3 changes these before T9).
+- Phase 1 Vercel check: deployment `market-charter-djcgk6xgi-windowtrendz.vercel.app` (function region syd1) → `GET /api/candles/AAPL` 200, 5000 candles, source `api` (1 credit), stored in the new project.
+
+### P2-T1 fix round 1
+- `lib/auth/next-path.ts`: `safeNextPath` now returns `/` for any control character (U+0000-U+001F, U+007F), closing the open redirect via `/\t/evil.com` (URL parsers strip tab/CR/LF). Tests added for tab, LF, CR and DEL.
+- Optional items also done: comment in `lib/supabase/server.ts` on the ignored `headers` argument; console spy restored in `afterEach` (`vi.restoreAllMocks()`) in `lib/supabase/proxy.test.ts`.
