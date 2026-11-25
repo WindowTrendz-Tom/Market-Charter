@@ -1,6 +1,6 @@
 # PLAN – Phase 1: Chart for one ticker
 
-Planner draft, round 1 (2026-11-25). There was no PLAN_REVIEW.md, so there are no review fixes yet.
+Planner draft, round 2 (2026-11-25). Revised after PLAN_REVIEW.md round 1; see "Review round 1 fixes" at the bottom.
 
 ---
 
@@ -37,7 +37,7 @@ Planner draft, round 1 (2026-11-25). There was no PLAN_REVIEW.md, so there are n
 
 ### Twelve Data
 `twelvedata.com` and `api.twelvedata.com` are **blocked from this cloud session** (DNS/proxy 403). These facts come from Twelve Data's published OpenAPI document (via the generated client `psyb0t/go-twelvedata` `client.gen.go`), the official `twelvedata-python` client source, and web search.
-- `GET https://api.twelvedata.com/time_series`. Params used: `symbol`, `interval` (`1day`), `outputsize` (1–5000; default 30 when no date params, **maximum when `start_date`/`end_date` are set**), `start_date` (`YYYY-MM-DD`, **inclusive**: "returns all records starting from"; for stocks it is read in the exchange's timezone), `order` (`asc`|`desc`, default desc).
+- `GET https://api.twelvedata.com/time_series`. Params used: `symbol`, `interval` (`1day`), `outputsize` (1–5000; default 30 when no date params, **maximum when `start_date`/`end_date` are set**), `start_date` (`YYYY-MM-DD`, **inclusive**: "returns all records starting from"; for stocks it is read in the exchange's timezone), `order` (`asc`|`desc`, default desc). **We never send `order`.** The docs don't say whether `order=asc` with `outputsize=5000` and no dates returns the newest or the oldest 5000 bars. The default `desc` (newest first) with `outputsize=5000` returns the latest 5000 bars, and we sort ascending locally.
 - `timezone` is **ignored for `1day`/`1week`/`1month`**. Daily data always comes back in exchange-local time, and a daily `datetime` is a date such as `2026-11-24`. *This contradicts any idea of asking Twelve Data for UTC daily bars*, so we convert ourselves (see "Time rules").
 - Values are **strings** (`"open": "148.73500"`). `volume` may be absent. Response shape: `{ meta: {...}, values: [...], status: "ok" }`.
 - Errors: JSON `{ "status": "error", "code": <int>, "message": "..." }`. The official Python client checks **both** the HTTP status and the JSON `code`, because an error can arrive with HTTP 200. Codes in the spec: 400 (bad params), 401 (invalid key), 403 (not on your plan), 404, 414, **429** ("You have run out of API credits for the current minute…"), 500.
@@ -120,9 +120,9 @@ Browser ──GET /api/candles/AAPL──► app/api/candles/[symbol]/route.ts  
 - **Known limitation:** if Twelve Data publishes a bar late (after 18:00 ET), clause (b) can hide that bar until the next day's cutoff. This is acceptable for personal use.
 
 ### Credit protection and concurrency
-- **Order of operations on a stale load:**
-  1. Freshness check (0 credits).
-  2. In-process de-dupe.
+- **Order of operations on a load:**
+  1. In-process de-dupe (same instance, same series: share one promise).
+  2. Freshness check (0 credits; stop here if fresh).
   3. Local budget guard.
   4. DB lease.
   5. Provider call (1 credit).
@@ -381,7 +381,7 @@ Conventions for all tasks:
 - build, lint and test pass;
 - `lib/env.test.ts` passes;
 - the local PG validation output (MIGRATION_OK plus the 4 expected results) is in PROGRESS.md;
-- `grep -rn "process.env" lib app | grep -v "lib/env.ts"` returns nothing.
+- `grep -rn "process.env" lib app --include=*.ts --include=*.tsx | grep -v "lib/env.ts" | grep -v "\.test\.tsx\?:"` returns nothing. This applies to non-test source only: opt-in integration tests such as T5's may read `process.env`.
 
 **Risks:**
 - Missing GRANTs means 42501 errors on real Supabase, so keep the grant block.
@@ -472,7 +472,7 @@ Conventions for all tasks:
    - Constructor `{ apiKey: string; fetchImpl?: typeof fetch; baseUrl?: string /* default "https://api.twelvedata.com" */; timeoutMs?: number /* default 10000 */ }`.
    - Exported constant `INITIAL_OUTPUTSIZE = 5000`.
    - Request:
-     - `GET ${baseUrl}/time_series?symbol=…&interval=1day&order=asc` + (`from` ? `&start_date=${from}` : `&outputsize=5000`), built with `URLSearchParams`;
+     - `GET ${baseUrl}/time_series?symbol=…&interval=1day` + (`from` ? `&start_date=${from}` : `&outputsize=5000`), built with `URLSearchParams`. **Do not send `order`.** Twelve Data's default `desc` returns the newest bars first, so the initial backfill gets the *latest* 5000 bars, not the oldest; step (d) sorts ascending locally;
      - header `Authorization: apikey ${apiKey}`; **never** put the key in the URL;
      - `cache: "no-store"`, `signal: AbortSignal.timeout(timeoutMs)`.
    - Response mapping:
@@ -483,7 +483,7 @@ Conventions for all tasks:
        - 401 → `auth`
        - 403 → `forbidden`
        - 404 → `not_found`
-       - 400: if message matches `/no data is available/i` → return `[]`; if it matches `/symbol|not found|invalid/i` → `not_found`; else `bad_response`
+       - 400: if message matches `/no data is available/i` → return `[]`; if it matches `/symbol/i` (e.g. "**symbol** not found: XYZ") → `not_found`; else `bad_response`
        - ≥ 500 → `unavailable`
        - anything else → `bad_response`
      - (d) `status === "ok"` and `values` an array: map each value:
@@ -495,10 +495,13 @@ Conventions for all tasks:
        - sort ascending by ts and de-dupe by ts.
      - (e) `ProviderError` messages contain Twelve Data's message but never the URL or the key.
 3. `index.ts` (`import "server-only"`): `export function getDataProvider(): DataProvider { return new TwelveDataProvider({ apiKey: getTwelveDataApiKey() }); }`. This is the single switch point when the provider changes.
-4. Fixture: 6 synthetic daily values for 2026-11-17 … 2026-11-24 (weekdays), with string prices, the 3rd value without `volume`, and a `meta` block (`symbol: "TEST"`, `exchange_timezone: "America/New_York"`).
+4. Fixture: 6 synthetic daily values for 2026-11-17 … 2026-11-24 (weekdays), **listed newest first** (Twelve Data's default `desc` order, which also exercises the local sort), with string prices, the 3rd value without `volume`, and a `meta` block (`symbol: "TEST"`, `exchange_timezone: "America/New_York"`).
 5. `twelve-data.test.ts`, with a fake `fetchImpl` that records calls:
    - success maps the fixture (count, first/last ts, numbers, `volume: null`);
    - URL has `outputsize=5000` and no `start_date` when `from` is omitted, and `start_date=2026-11-20` and no `outputsize` when given;
+   - **URL assertion: in both cases `new URL(url).searchParams.has("order")` is `false`**, and the parsed params are exactly `{symbol, interval, outputsize}` or `{symbol, interval, start_date}` (no others);
+   - the newest-first fixture comes back sorted ascending (first ts `2026-11-17…`, last `2026-11-24…`);
+   - 400 `"Invalid **interval** provided"` → `bad_response` (not `not_found`);
    - `Authorization` header is `apikey test-key`, and `"test-key"` is not in the URL;
    - HTTP 429 → `rate_limited`;
    - **HTTP 200 with `{status:"error",code:429}` → `rate_limited`**;
@@ -619,9 +622,9 @@ Conventions for all tasks:
      ```
    - The symbol is already normalised by the caller.
    - Algorithm:
-     1. Read `latestTs = store.getLatestCandleTs()` and `lastOk = store.getLastOkFetchAt()`. If `isDailyCacheFresh(...)` → `{ ok, candles: store.getCandles(), source:"cache", stale:false, notice:null }`. **No provider call, no fetch_log write.**
-     2. `key = \`${symbol}:${interval}\``. If `inFlight.has(key)`, return `await inFlight.get(key)`. Otherwise `p = refresh(...)`, `inFlight.set(key, p)`, and `try { return await p } finally { inFlight.delete(key) }`. `inFlight` is a module-level `Map<string, Promise<ChartCandlesResult>>`.
-     3. `refresh`, budget guard:
+     1. **In-process de-dupe first (synchronous, before any await):** `key = \`${symbol}:${interval}\``. If `inFlight.has(key)`, return `inFlight.get(key)`. Otherwise `p = load(symbol, interval, deps)`, `inFlight.set(key, p)`, and `try { return await p } finally { inFlight.delete(key) }`. `inFlight` is a module-level `Map<string, Promise<ChartCandlesResult>>`. The whole call is de-duped, including the freshness reads, so the result doesn't depend on microtask ordering.
+     2. `load`: read `latestTs = store.getLatestCandleTs()` and `lastOk = store.getLastOkFetchAt()`. If `isDailyCacheFresh(...)` → `{ ok, candles: store.getCandles(), source:"cache", stale:false, notice:null }`. **No provider call, no fetch_log write.** Otherwise continue with step 3.
+     3. Budget guard:
         - `minute = sumCreditsSince(now − 60 s)`. If `minute ≥ 8` → `limited("minute", 60)`.
         - `day = sumCreditsSince(UTC midnight of now)`. If `day ≥ 800` → `limited("day", secondsUntilNextUtcMidnight)`.
      4. `leaseId = acquireFetchLease(symbol, interval, now)`. If `null` → `busy()`.
@@ -682,6 +685,8 @@ Conventions for all tasks:
 
 **Risks:**
 - The in-flight Map is per instance, which is why the DB lease exists.
+- The minute/day budget guard (read sums, then call) isn't atomic across *different* symbols on separate serverless instances. Two cold loads at 7/8 could both pass, giving at most a 1–2 credit overshoot, and Twelve Data's own 429 is still handled. This is accepted for a single user; no extra locking.
+- Unknown tickers never become "fresh", so each reload of a bad ticker spends 1 credit (capped by the guard). A negative cache (e.g. skip re-fetching a `not_found` series for 24 h) is deferred and only worth doing if it shows up in `fetch_log`.
 - Counting credits on 429s is conservative and could slightly under-use the budget. That's acceptable.
 - Stored `fetch_log` messages come from the provider; make sure no URL or key gets in.
 
@@ -767,7 +772,7 @@ Conventions for all tasks:
    - `export default async function Page({ params }: { params: Promise<{ symbol: string }> })`;
    - `symbol = normaliseSymbol((await params).symbol)`; if null → `notFound()`;
    - render `<h1>{symbol}</h1><p>Daily candles</p><ChartView key={symbol} symbol={symbol} />`;
-   - `generateMetadata` → title `` `${symbol} – Market Charter` ``.
+   - `generateMetadata({ params })` awaits params and normalises: valid → title `` `${symbol} – Market Charter` ``; `null` → title `"Chart – Market Charter"` (never throws).
 6. **Secret-leak check** (no keys needed):
    ```bash
    TWELVE_DATA_API_KEY=leakcheck-td-9f3a SUPABASE_SECRET_KEY=leakcheck-sb-7c1d NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co npm run build
@@ -842,8 +847,28 @@ Decisions taken in this plan. Flag any you disagree with; none need an answer to
 - All four tables are created now, so no schema change is needed in Phase 2–4.
 - Daily bars are stored as `date 00:00Z`. The in-progress US-session bar is never cached, so charts update after 18:00 New York time (about noon NZ).
 - The env vars are `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SECRET_KEY`, not "anon/service role".
+- **Test-data deletion ("ask before deleting data" rule):** the opt-in Supabase integration test (P1-T5, run in P1-T9 step 2) deletes only the rows it created itself (`symbol like 'ZZTEST%'` in `candles` and `fetch_log`). Nothing else is ever deleted. If you'd rather it didn't delete at all, say so and the cleanup will be dropped; the test rows would then stay in the tables.
 
 ---
 
-## Plan review fixes
-None. This is the first draft; no PLAN_REVIEW.md existed.
+## Review round 1 fixes
+
+**Required**
+1. **P1-T4: initial backfill relied on unverified `order=asc` + `outputsize=5000` behaviour.** Fixed:
+   - The request no longer sends `order`; it uses Twelve Data's default `desc`, so the backfill gets the latest 5000 bars. Step (d) already sorts ascending and de-dupes locally.
+   - New T4 tests:
+     - the URL has no `order` param, and the exact param set is checked for both the backfill and incremental requests;
+     - the fixture is newest-first, and the result is asserted to come back ascending.
+   - Verified facts now record that `order` is never sent, and why.
+   - The T9 step 6 check (`max(ts)` = expected latest trading date) is unchanged.
+
+**Optional points**
+| Point | Applied? | How |
+|---|---|---|
+| T2/T5 `process.env` grep contradiction | Yes | The T2 grep now excludes `*.test.ts(x)` and states it applies to non-test source only |
+| T6 negative cache for unknown tickers | No (noted) | Added to T6 Risks as deferred; the budget guard already caps the cost |
+| T6 guard not atomic across symbols and instances | Yes (note) | Added to T6 Risks: at most 1–2 credits overshoot, Twelve Data's 429 is still handled, accepted for a single user |
+| T4 400 mapping too broad | Yes | `not_found` now only when the message matches `/symbol/i`; new test: "Invalid interval provided" → `bad_response` |
+| T8 `generateMetadata` null symbol | Yes | Falls back to the title "Chart – Market Charter" |
+| T5/T9 ZZTEST deletion awareness | Yes | Added under "Decisions taken" in Open questions, with the option to drop the cleanup |
+| T6 case 10 microtask ordering | Yes | In-process de-dupe moved to the very start of `getChartCandles` (synchronous, before any await) and keyed on the whole call |
