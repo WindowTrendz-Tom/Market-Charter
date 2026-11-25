@@ -346,3 +346,22 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 **Issues / notes**
 - The extra file `route-handler.ts` is the only deviation from the plan's file list; behaviour matches the plan's common flow.
 - `deps.ts` uses the admin client for the candle cache only, as the plan specifies. The T6 grep (`lib/watchlist`) now hits `deps.ts` for that reason; the service and store files still never use it.
+
+### P2-T8a – events, API client, refresh queue (awaiting review)
+
+**What changed**
+- New `lib/watchlist/events.ts`: `CANDLES_UPDATED_EVENT`.
+- New `lib/watchlist/client.ts`: `createWatchlistClient({fetch, sleep})` (`list`, `add`, `remove`, `saveOrder`, `refresh`) over `fetchWithAuthRetry`, `ApiResult`, `RefreshOutcome`, `toRefreshOutcome`, plus an exported `WatchlistClient` type for T8b. Error mapping as specified.
+- New `lib/watchlist/refresh-queue.ts`: `runRefreshQueue` as specified.
+- Tests: `client.test.ts` (fake fetch; every request shape, error mapping and `toRefreshOutcome` branch) and `refresh-queue.test.ts` (all plan cases plus empty queue, limited without item, failed pacing).
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm run build` passes; `npm test`: 31 files passed, 1 skipped; 316 passed, 11 skipped (was 282; +34).
+- `grep -rn "twelvedata\|SUPABASE_SECRET\|TWELVE_DATA" components lib/watchlist/client.ts lib/watchlist/refresh-queue.ts` -> no output.
+- Sidebar, layout, chart-view hook and CSS are T8b (not built).
+
+**API credits used:** 0.
+
+**Issues / notes**
+- Plan is silent on whether a `failed` outcome on the last item sleeps; I skip the pause after the last item for `failed` too (same as `fetched`).
+- Busy retry loop also checks `isCancelled()` after each busy sleep (small addition so unmount stops promptly).

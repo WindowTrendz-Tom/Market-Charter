@@ -1,16 +1,21 @@
 VERDICT: APPROVED
 
-Review of P2-T7 (round 1). Checks run: `npx tsc --noEmit` clean, `npm run lint` clean, `npm test` 282 passed / 11 skipped, `npm run build` lists `ƒ /api/watchlist` and `ƒ /api/watchlist/refresh`. No Twelve Data calls; .env.local not read.
+# Code review – P2-T8a (round 1)
 
-Checked and OK
-- Every handler goes through `withWatchlistDeps`. `getAuthContext()` runs first, and `!user` returns 401 before `buildWatchlistDeps`, body parsing or any service call. Per-method 401 tests assert deps and the services are not called.
-- The user id comes only from the session. Routes never read a user id from the body, query or headers, and the store inserts without `user_id` (column default `auth.uid()`).
-- `deps.ts`: the watchlist store gets the user-scoped `supabase` client, and only the candle store gets `createSupabaseAdminClient()`. The provider comes from `getDataProvider()`. The key stays server-side (`server-only`).
-- Body handling matches the plan. Bad JSON, arrays, null and numbers give 400 `invalid_body`. POST returns 201, DELETE returns 204 with a null body and `no-store`, and PATCH saves then re-lists. Failures map through `errorJson`, including `Retry-After`.
-- Error bodies are generic. `ConfigError` logs only the variable names and returns 500 `config` with no names in the body. Other throws log `err.message` only and return a generic `provider_error`.
-- The routes use `force-dynamic` and the standard `Request`/`Response` handlers, so they are compatible with Next.js 16 route conventions.
-- Scope: `lib/watchlist/route-handler.ts` is acceptable. It is a thin shared wrapper that removes five copies of the auth, config and error flow. It adds no behaviour beyond the plan's common flow.
+Scope: steps 1–3 of P2-T8 (`lib/watchlist/events.ts`, `client.ts`, `refresh-queue.ts` + tests). Sidebar/layout/CSS are P2-T8b (allowed split).
 
-Optional
-- `route-handler.ts` imports `ChartCandlesFailure` from `get-chart-candles`. That is fine, but the plan's file list should note the extra file.
-- `readJsonObject` casts with `as Record<string, unknown>`. That is safe after the guard.
+(Written by the orchestrator from the code reviewer's returned report; the reviewer did not write this file itself.)
+
+## Checks
+- `npm run build`, `npm run lint`, `npm test` (31 files, 316 passed, 11 skipped), `tsc` – all pass.
+- Credential grep (twelvedata, SUPABASE_SECRET, TWELVE_DATA) on client/queue code – nothing. No `server-only` imports, no stray `any`.
+- Pacing: waits `REFRESH_PACE_MS` (10 s) after `fetched`/`failed`, skips after last item → ≤ 6 credits/min per queue.
+- Rate limit: `limited` emits its item (if any) and returns `limited` with message; no auto-retry; caller offers Retry.
+- Cancel: `isCancelled()` before each item and after each busy sleep.
+- Retries: busy retries capped at 3, then skip. No unbounded loops.
+- Client: 401 → `unauthorized`; 409 passes body code/message; 429 → `limited`; network throw / empty body / unparsable OK body → error result, no crash.
+- Plan queue test cases covered, plus extras.
+- Executor's 4 concerns accepted (no pause after last `failed` item; cancel check after busy sleep; exported `WatchlistClient` type; notes).
+
+## Optional
+- `limited` returns without calling `onProgress` (matches plan) – T8b must not rely on a progress event for that item.
