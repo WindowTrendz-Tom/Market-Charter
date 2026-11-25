@@ -79,3 +79,22 @@
 **API credits used:** 0
 
 **Issues:** none.
+
+### P1-T5 – Candle store: interface, Supabase implementation, in-memory test double (built, awaiting code review)
+
+**What changed**
+- `lib/cache/candle-store.ts`: `CandleStore` interface, `FetchCompletion`, `FetchFinalStatus`, `StoreError`, `LEASE_TTL_MS`.
+- `lib/cache/supabase-candle-store.ts` (`server-only`): `createSupabaseCandleStore(client)`. Paged reads (1000/page, 50-page cap), chunked upsert with `onConflict: "symbol,interval,ts"`, lease acquire (expire stale pending, insert with injected `created_at`, `23505` returns null), complete, `sumCreditsSince`. Non-lease errors throw `StoreError` with only the Supabase message.
+- `test/helpers/memory-candle-store.ts`: `MemoryCandleStore` with `logRows`, `seedCandles`, `seedLog`, `failNext`.
+- `test/helpers/candle-store-contract.ts`: shared contract (round trip, overwrite, latest ts, lease cycle, stale-lease expiry, independent series, ok-only `getLastOkFetchAt`, `sumCreditsSince` boundaries). It uses a fake clock in year 2100 so the credit sums only see its own rows, even against a database with real history.
+- Tests: `test/memory-candle-store.test.ts`, `lib/cache/supabase-candle-store.test.ts` (fake fetch, cases a-e plus empty upsert and lease expiry/insert shape), `lib/cache/supabase-candle-store.integration.test.ts` (opt-in).
+
+**Proof**
+- `npm run build`, `npm run lint` clean; `npx tsc --noEmit` clean.
+- Normal `npm test`: 8 files passed, 1 skipped (integration, 10 tests skipped); 60 passed.
+- Integration, real Supabase project: `set -a; . ./.env.local; set +a; NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt RUN_SUPABASE_TESTS=1 npm test` gave 9 files / 70 tests all passed. Without `NODE_USE_ENV_PROXY=1` Node's fetch bypasses the sandbox proxy and fails with "fetch failed" (environment issue only).
+- The integration test's cleanup deleted only `symbol like 'ZZTEST%'` rows from `candles` and `fetch_log`.
+
+**API credits used:** 0 (Twelve Data not called; Supabase only)
+
+**Issues:** none. Note the integration test writes fetch_log rows dated 2100-01-01 onward while it runs; they are removed by cleanup.
