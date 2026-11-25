@@ -125,3 +125,17 @@
 - A non-`ProviderError` throw from the provider closes the lease as `error` and is rethrown; P1-T7's route turns it into a 500.
 - Notice text when serving cache after `not_found` / `forbidden`: code `provider_error` (per plan), message = the not_found / forbidden text.
 - Re P1-T5 optional note: expired leases keep `credits_used = 1`, so the budget guard counts them. This is intended (conservative).
+
+### P1-T7 – API route `GET /api/candles/[symbol]` (built, awaiting code review)
+
+**What changed**
+- `app/api/candles/[symbol]/route.ts`: `force-dynamic`; awaits `params`; validates symbol (400 `invalid_symbol`) and interval (400 `invalid_interval`); builds store and provider (`ConfigError` logs only the missing var names, returns 500 `config`); calls `getChartCandles`; maps `Candle.ts` to `time` in UTC seconds; failures pass through status, code, message and `Retry-After`; every response is `Cache-Control: no-store`; any other throw returns a generic 500 `provider_error` and logs only the error message.
+- `app/api/candles/[symbol]/route.test.ts`: 8 tests with mocked service, store, admin client and provider factory.
+
+**Proof**
+- `npm run build` passes and lists `ƒ /api/candles/[symbol]`; `npm run lint` clean; `npm test`: 10 files passed, 1 skipped; 95 passed, 10 skipped (8 new).
+- Tests cover 200 shape and no-store, invalid symbol and interval (service not called), 429 with `Retry-After: 60`, busy 503 with `Retry-After: 3`, config error 500 with no env value, var name or stack in the body, unexpected throw (generic body), and stale result with notice as 200.
+
+**API credits used:** 0
+
+**Issues:** none.
