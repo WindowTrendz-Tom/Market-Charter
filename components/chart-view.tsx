@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { fetchWithAuthRetry } from "@/lib/http/fetch-with-auth-retry";
 import type { CandlesResponse, ErrorResponse } from "@/lib/candles/api-types";
+import { CANDLES_UPDATED_EVENT } from "@/lib/watchlist/events";
 import { formatNzDate } from "@/lib/time/display";
 import { CandleChart } from "./candle-chart";
 
@@ -65,7 +66,11 @@ export function ChartView({ symbol }: { symbol: string }) {
     let cancelled = false;
     async function run() {
       const next = await loadCandles(symbol, () => cancelled);
-      if (!cancelled) setState(next);
+      if (cancelled) return;
+      setState(next);
+      if (next.kind === "ready" && next.data.source === "api") {
+        window.dispatchEvent(new Event(CANDLES_UPDATED_EVENT));
+      }
     }
     void run();
     return () => {

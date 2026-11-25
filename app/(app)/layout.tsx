@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/session";
+import { WatchlistSidebar } from "@/components/watchlist-sidebar";
 import { signOut } from "./actions";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -17,8 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </form>
       </header>
       <aside className="sidebar" aria-label="Watchlist">
-        <h2>Watchlist</h2>
-        <p className="muted">Coming in P2-T8.</p>
+        <WatchlistSidebar />
       </aside>
       <section className="content">{children}</section>
     </div>

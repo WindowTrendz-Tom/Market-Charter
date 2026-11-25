@@ -365,3 +365,26 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 **Issues / notes**
 - Plan is silent on whether a `failed` outcome on the last item sleeps; I skip the pause after the last item for `failed` too (same as `fetched`).
 - Busy retry loop also checks `isCancelled()` after each busy sleep (small addition so unmount stops promptly).
+
+### P2-T8b – sidebar, layout, chart-view hook, CSS (awaiting review)
+
+**What changed**
+- New `components/watchlist-sidebar.tsx` (client): list on mount, then one paced queue (`queueRef`/`runningRef`) for null or stale quotes; add form, rows with price/change/date, move up/down, remove (optimistic, restored on failure, 409 reloads), status line with Retry on `limited`, login link on 401, `CANDLES_UPDATED_EVENT` listener that merges quotes only (no queue restart). State is set only after awaits.
+- `app/(app)/layout.tsx`: placeholder replaced by `<WatchlistSidebar />` inside the existing `<aside>`.
+- `components/chart-view.tsx`: dispatches `CANDLES_UPDATED_EVENT` after `setState` when `source === "api"`.
+- `app/globals.css`: watchlist rules per plan.
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm run build` passes; `npm test`: 31 files passed, 1 skipped; 316 passed, 11 skipped (no new tests; none planned for T8b).
+- `grep -rn "twelvedata\|SUPABASE_SECRET\|TWELVE_DATA" components lib/watchlist/client.ts lib/watchlist/refresh-queue.ts` -> no output.
+- Not rendered: needs a login; full UI proof is T9.
+
+**API credits used:** 0.
+
+**Issues / notes**
+- Beyond plan: move/remove buttons disable while a save is in flight (avoids overlapping optimistic updates); a new queue run resets `queueRef` so a symbol that went stale again can be re-queued; `limited` does not fire `onProgress`, so the paused line does not rely on it.
+- Added `<h2>Watchlist</h2>` inside the component (removed from layout).
+
+### O2 / O3 – Test user and auth lock-down (orchestrator, before P2-T9)
+- O2: created confirmed test user `e2e@example.com` via Auth admin API (random 24-char password). `E2E_USER_EMAIL` / `E2E_USER_PASSWORD` stored in `.env.local` only (never printed or committed).
+- O3: auth config PATCHed → disable_signup=true, password_min_length=12, email provider on, anonymous off (read back from the API).

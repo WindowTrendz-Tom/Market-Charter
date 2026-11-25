@@ -85,3 +85,45 @@ footer {
 .login-form input {
   padding: 6px 8px;
 }
+
+.watchlist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.watchlist li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #eee;
+}
+
+.watchlist li[aria-current="page"] {
+  background: #eef4ff;
+}
+
+.watchlist .actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 4px;
+}
+
+.up {
+  color: #137333;
+}
+
+.down {
+  color: #c5221f;
+}
+
+.flat {
+  color: #555;
+}
+
+.price,
+.change {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
