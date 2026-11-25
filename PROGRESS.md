@@ -98,3 +98,30 @@
 **API credits used:** 0 (Twelve Data not called; Supabase only)
 
 **Issues:** none. Note the integration test writes fetch_log rows dated 2100-01-01 onward while it runs; they are removed by cleanup.
+
+### P1-T6 – Cache-first candle service (freshness, budget guard, lease, de-dupe) (built, awaiting code review)
+
+**What changed**
+- `lib/candles/api-types.ts`: `ApiCandle`, `NoticeCode`, `Notice`, `ErrorCode`, `CandlesResponse`, `ErrorResponse` (types only, safe for the client).
+- `lib/candles/limits.ts`: `CREDITS_PER_MINUTE = 8`, `CREDITS_PER_DAY = 800`, `CREDITS_PER_CALL = 1`, `BUSY_RETRY_SECONDS = 3`.
+- `lib/candles/get-chart-candles.ts` (`server-only`): `getChartCandles(symbol, interval, { store, provider, now? })` returning `ChartCandlesResult`. Order: in-process de-dupe (synchronous, before any await, keyed `symbol:interval`, whole call shared) → freshness (`isDailyCacheFresh`) → minute/day budget guard → DB lease → provider call (`from` = last cached date, inclusive) → drop bars after the expected date → upsert → close lease → read all. Provider errors map per plan (rate_limited / not_found / forbidden / unavailable / auth / bad_response) via an exhaustive `Record<ProviderErrorKind, …>`. Every `StoreError` → 503 `cache_unavailable`. User-facing messages are the plan's exact text; cached responses are prefixed "Showing cached data. ". Provider messages stored in `fetch_log.message` are cut to 500 chars.
+- `test/helpers/fake-provider.ts`: `FakeProvider` (records `calls`, queued results/errors, optional `delayMs`; no network).
+- `lib/candles/get-chart-candles.test.ts`: 27 tests (MemoryCandleStore + FakeProvider + fixed clock, synthetic data).
+
+**Proof**
+- `npm run build` passes; `npm run lint` clean; `npx tsc --noEmit` clean.
+- `npm test`: 9 files passed, 1 skipped (Supabase integration); 87 passed, 10 skipped. New file: 27/27.
+- All 14 plan cases are covered and assert `provider.calls` and `store.logRows()`:
+  1 backfill (`from` undefined, one `ok` row, credits 1); **2 second load = 0 provider calls, still 1 log row, `source:"cache"`** (unit proof of acceptance #3); 3 incremental `from:"2026-11-20"`, 11-25 not stored, result ends 11-24, repeat 0 calls; 4 Thanksgiving clause (b), repeat 0 calls; 5 minute guard with/without cache (429, retry 60, no new row; 7 credits still allowed); 6 day guard (800 since UTC midnight, retry 25200 s at 17:00Z); 7 provider 429 with/without cache (row `rate_limited`, credits 1); 8 lease held 10 s ago (503 busy retry 3 / stale + `busy` notice); 9 lease 61 s old → `expired`, new `ok` row; 10 `Promise.all` with 20 ms delay → 1 call, identical results, 1 row; 11 not_found → 404, row `not_found`; 12 unavailable with cache → stale + `provider_unavailable`, row `error`; 13 store failure (`getLatestCandleTs`, plus `getLastOkFetchAt`, `sumCreditsSince`, `acquireFetchLease`) → 503 `cache_unavailable`, 0 calls; 14 `completeFetchLease` failure → still `ok:true`.
+- Extra cases: forbidden → 403; auth/bad_response → 502 `provider_error` with 500-char log message and a server-side `console.error`; non-provider error → lease closed `error` and rethrown; successful call leaving the series empty → 404.
+- `grep -rn "twelve-data" lib/candles/`: no output (the service imports only types from `@/lib/data-provider/types`).
+
+**API credits used:** 0 (FakeProvider only; no Twelve Data or Supabase calls)
+
+**Issues / decisions for review** (small points the plan didn't spell out)
+- De-dupe uses `load(...).finally(() => inFlight.delete(key))` and returns the shared promise, rather than the plan's `try { return await p } finally {…}`. Same behaviour; the map entry is removed only if it is still the same promise.
+- `upsertCandles` failure after a successful call: the lease is closed best-effort as `error` / "Saving candles failed" (not `ok`, so the cache doesn't look fresh), then 503 `cache_unavailable`. The plan only said "any StoreError → 503".
+- `completeFetchLease` failures are tolerated (logged) on provider-error paths too, not only after success, so the provider outcome is still reported; the pending row expires after 60 s.
+- A non-`ProviderError` throw from the provider closes the lease as `error` and is rethrown; P1-T7's route turns it into a 500.
+- Notice text when serving cache after `not_found` / `forbidden`: code `provider_error` (per plan), message = the not_found / forbidden text.
+- Re P1-T5 optional note: expired leases keep `credits_used = 1`, so the budget guard counts them. This is intended (conservative).
