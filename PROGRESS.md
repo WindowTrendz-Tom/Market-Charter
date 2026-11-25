@@ -242,3 +242,21 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 ### P2-T2 fix round 1
 - `lib/auth/sign-in-error.ts`: a missing or zero status (auth-js `AuthRetryableFetchError` reports `status: 0` on network failure) now maps to "Couldn't reach the login service. Try again shortly." (`!status || status >= 500`). Test added for `signInErrorMessage(0)`.
 - Optional items not actioned (not blocking).
+
+### P2-T3 – Provider: `searchSymbols` + US-listing rule (awaiting review)
+
+**What changed**
+- `lib/data-provider/types.ts`: `SymbolMatch` and `DataProvider.searchSymbols`.
+- `lib/data-provider/twelve-data.ts`: fetch, parse and error mapping extracted into private `requestJson(path, params)` (returns `null` for 400 "no data is available"); `getCandles` uses it; new `searchSymbols` (`/symbol_search`, `symbol` + `outputsize=30`, skips items without a symbol, keeps provider order, missing `data` gives `bad_response`).
+- `lib/symbols/us-listing.ts`: `US_MIC_CODES`, `US_COUNTRY`, `pickUsListing` (exact symbol match, US by country or MIC, prefers Common Stock then ETF then first), `summariseMatches`.
+- `test/helpers/fake-provider.ts`: `searchCalls`, `enqueueSearch`, `searchSymbols`.
+- New: `test/fixtures/twelve-data-symbol-search.json` (synthetic), `lib/symbols/us-listing.test.ts`; new `describe("searchSymbols")` in `twelve-data.test.ts`.
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm test`: 21 files passed, 1 skipped; 165 passed, 10 skipped (all existing `twelve-data.test.ts` cases untouched and passing); `npm run build` passes.
+- `grep -rn symbol_search app components` -> no output.
+
+**API credits used:** 0 (fake fetch only).
+
+**Issues / notes**
+- The final "unexpected response" `bad_response` in `getCandles` (HTTP 200, body not `status: ok` with `values`) no longer carries `httpStatus`, because the status is not returned from `requestJson`. Nothing reads `httpStatus` today.

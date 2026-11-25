@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "@/test/fixtures/twelve-data-time-series-1day.json";
+import searchFixture from "@/test/fixtures/twelve-data-symbol-search.json";
 import { INITIAL_OUTPUTSIZE, TwelveDataProvider } from "./twelve-data";
 import { ProviderError } from "./types";
 
@@ -130,6 +131,71 @@ describe("TwelveDataProvider", () => {
   it("error messages never contain the key or URL", async () => {
     const { provider } = makeProvider(() => json({ status: "error", code: 401, message: "bad key" }, 401));
     const err = await provider.getCandles("TEST", "1day").then(
+      () => new Error("did not throw"),
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.message).not.toContain("test-key");
+    expect(err.message).not.toContain("http");
+  });
+});
+
+describe("searchSymbols", () => {
+  it("maps the fixture in provider order and skips items without a symbol", async () => {
+    const { provider } = makeProvider(() => json(searchFixture));
+    const matches = await provider.searchSymbols("AAPL");
+    expect(matches).toHaveLength(3);
+    expect(matches[0]).toEqual({
+      symbol: "AAPL",
+      name: "Apple Inc",
+      exchange: "NASDAQ",
+      micCode: "XNGS",
+      country: "United States",
+      instrumentType: "Common Stock",
+      currency: "USD",
+    });
+    expect(matches.map((m) => m.exchange)).toEqual(["NASDAQ", "BMV", "NYSE"]);
+  });
+
+  it("requests /symbol_search with symbol and outputsize only", async () => {
+    const { provider, calls } = makeProvider(() => json(searchFixture));
+    await provider.searchSymbols("AAPL");
+    const url = new URL(calls[0].url);
+    expect(url.host).toBe("api.twelvedata.com");
+    expect(url.pathname).toBe("/symbol_search");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ symbol: "AAPL", outputsize: "30" });
+  });
+
+  it("sends the key only in the Authorization header", async () => {
+    const { provider, calls } = makeProvider(() => json(searchFixture));
+    await provider.searchSymbols("AAPL");
+    expect(new Headers(calls[0].init?.headers).get("Authorization")).toBe("apikey test-key");
+    expect(calls[0].url).not.toContain("test-key");
+  });
+
+  it("maps an error body code 429 to rate_limited", async () => {
+    const { provider } = makeProvider(() => json({ status: "error", code: 429, message: "run out of API credits" }, 200));
+    expect(await kindOf(provider.searchSymbols("AAPL"))).toBe("rate_limited");
+  });
+
+  it("maps a response without data to bad_response", async () => {
+    const { provider } = makeProvider(() => json({ status: "ok" }));
+    expect(await kindOf(provider.searchSymbols("AAPL"))).toBe("bad_response");
+  });
+
+  it("returns [] for an empty data array", async () => {
+    const { provider } = makeProvider(() => json({ data: [], status: "ok" }));
+    expect(await provider.searchSymbols("ZZZZ")).toEqual([]);
+  });
+
+  it("maps a 500 to unavailable", async () => {
+    const { provider } = makeProvider(() => json({ status: "error", code: 500, message: "oops" }, 500));
+    expect(await kindOf(provider.searchSymbols("AAPL"))).toBe("unavailable");
+  });
+
+  it("error messages never contain the key or URL", async () => {
+    const { provider } = makeProvider(() => json({ status: "error", code: 401, message: "bad key" }, 401));
+    const err = await provider.searchSymbols("AAPL").then(
       () => new Error("did not throw"),
       (e: unknown) => e as Error,
     );

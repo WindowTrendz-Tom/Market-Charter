@@ -11,10 +11,22 @@ export interface Candle {
   volume: number | null;
 }
 
+export interface SymbolMatch {
+  symbol: string;
+  name: string | null;
+  exchange: string | null;
+  micCode: string | null;
+  country: string | null;
+  instrumentType: string | null;
+  currency: string | null;
+}
+
 export interface DataProvider {
   readonly name: string;
   /** Candles ascending by ts. `from` = 'YYYY-MM-DD', inclusive, exchange-local date. Omitted = full history backfill. */
   getCandles(symbol: string, interval: Interval, from?: string): Promise<Candle[]>;
+  /** Ticker search (1 credit). Exact provider order (relevance). */
+  searchSymbols(query: string): Promise<SymbolMatch[]>;
 }
 
 export type ProviderErrorKind =

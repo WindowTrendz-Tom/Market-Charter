@@ -1,0 +1,10 @@
+{
+  "_comment": "Synthetic test data in the shape of a Twelve Data /symbol_search response, not real output.",
+  "data": [
+    { "symbol": "AAPL", "instrument_name": "Apple Inc", "exchange": "NASDAQ", "mic_code": "XNGS", "exchange_timezone": "America/New_York", "instrument_type": "Common Stock", "country": "United States", "currency": "USD" },
+    { "symbol": "AAPL", "instrument_name": "Apple Inc", "exchange": "BMV", "mic_code": "XMEX", "exchange_timezone": "America/Mexico_City", "instrument_type": "Common Stock", "country": "Mexico", "currency": "MXN" },
+    { "symbol": "APLE", "instrument_name": "Apple Hospitality REIT Inc", "exchange": "NYSE", "mic_code": "XNYS", "exchange_timezone": "America/New_York", "instrument_type": "REIT", "country": "United States", "currency": "USD" },
+    { "instrument_name": "Item without a symbol", "exchange": "NYSE", "mic_code": "XNYS", "instrument_type": "Common Stock", "country": "United States", "currency": "USD" }
+  ],
+  "status": "ok"
+}

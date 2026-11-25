@@ -1,6 +1,6 @@
 import "server-only";
 import { dateToDailyTs } from "@/lib/time/market-calendar";
-import { ProviderError, type Candle, type DataProvider, type Interval } from "./types";
+import { ProviderError, type Candle, type DataProvider, type Interval, type SymbolMatch } from "./types";
 
 export const INITIAL_OUTPUTSIZE = 5000;
 
@@ -29,12 +29,32 @@ interface RawResponse {
   code?: unknown;
   message?: unknown;
   values?: unknown;
+  data?: unknown;
 }
 
 function toNumber(value: unknown): number {
   if (typeof value === "number") return value;
   if (typeof value === "string" && value.trim() !== "") return Number(value);
   return NaN;
+}
+
+function toStringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function mapMatch(raw: unknown): SymbolMatch | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if (typeof m.symbol !== "string" || m.symbol === "") return null;
+  return {
+    symbol: m.symbol,
+    name: toStringOrNull(m.instrument_name),
+    exchange: toStringOrNull(m.exchange),
+    micCode: toStringOrNull(m.mic_code),
+    country: toStringOrNull(m.country),
+    instrumentType: toStringOrNull(m.instrument_type),
+    currency: toStringOrNull(m.currency),
+  };
 }
 
 function mapValue(raw: unknown): Candle {
@@ -67,15 +87,11 @@ export class TwelveDataProvider implements DataProvider {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  async getCandles(symbol: string, interval: Interval, from?: string): Promise<Candle[]> {
-    // Never send `order`: the default (newest first) makes the backfill return the latest bars. We sort locally.
-    const params = new URLSearchParams({ symbol, interval });
-    if (from) params.set("start_date", from);
-    else params.set("outputsize", String(INITIAL_OUTPUTSIZE));
-
+  /** Fetches and parses one endpoint, mapping every error. Returns null for "no data is available". */
+  private async requestJson(path: string, params: URLSearchParams): Promise<RawResponse | null> {
     let res: Response;
     try {
-      res = await this.fetchImpl(`${this.baseUrl}/time_series?${params.toString()}`, {
+      res = await this.fetchImpl(`${this.baseUrl}${path}?${params.toString()}`, {
         headers: { Authorization: `apikey ${this.apiKey}` },
         cache: "no-store",
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -102,16 +118,33 @@ export class TwelveDataProvider implements DataProvider {
       if (code === 403) throw new ProviderError("forbidden", message, res.status);
       if (code === 404) throw new ProviderError("not_found", message, res.status);
       if (code === 400) {
-        if (/no data is available/i.test(message)) return [];
+        if (/no data is available/i.test(message)) return null;
         if (/symbol/i.test(message)) throw new ProviderError("not_found", message, res.status);
         throw new ProviderError("bad_response", message, res.status);
       }
       if (code >= 500) throw new ProviderError("unavailable", message, res.status);
       throw new ProviderError("bad_response", message, res.status);
     }
+    return json;
+  }
 
+  async searchSymbols(query: string): Promise<SymbolMatch[]> {
+    const json = await this.requestJson("/symbol_search", new URLSearchParams({ symbol: query, outputsize: "30" }));
+    if (json === null) return [];
+    if (!Array.isArray(json.data)) throw new ProviderError("bad_response", "Data provider returned an unexpected response");
+    return json.data.map(mapMatch).filter((m): m is SymbolMatch => m !== null);
+  }
+
+  async getCandles(symbol: string, interval: Interval, from?: string): Promise<Candle[]> {
+    // Never send `order`: the default (newest first) makes the backfill return the latest bars. We sort locally.
+    const params = new URLSearchParams({ symbol, interval });
+    if (from) params.set("start_date", from);
+    else params.set("outputsize", String(INITIAL_OUTPUTSIZE));
+
+    const json = await this.requestJson("/time_series", params);
+    if (json === null) return [];
     if (json.status !== "ok" || !Array.isArray(json.values)) {
-      throw new ProviderError("bad_response", "Data provider returned an unexpected response", res.status);
+      throw new ProviderError("bad_response", "Data provider returned an unexpected response");
     }
     const byTs = new Map<string, Candle>();
     for (const raw of json.values) {
