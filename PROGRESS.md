@@ -160,3 +160,29 @@
 **Issues / notes**
 - The "Loading AAPL…" text and the red error box are client-rendered after hydration, so they were not checked by curl; the loading text is in the SSR HTML only split by React comment markers. The error-box path was not seen in a browser (no browser here); it is covered by code reading only.
 - Components have no render tests beyond the footer (plan only asked for that).
+
+### P1-T9 – Live acceptance proof (run in cloud session with live keys; awaiting review)
+
+**What changed:** no code. Evidence screenshots added in `docs/evidence/`: `p1-t9-aapl-desktop.png` (1280x800 @2x, first load, "Source: Twelve Data (just fetched)"), `p1-t9-aapl-phone.png` (390x844 @2x, "Source: Supabase cache"), `p1-t9-bad-ticker.png`.
+
+**Proof** (Supabase counts read with a small script using the secret key; nothing printed)
+- Step 1 (RLS query on pg_class): NOT run. No SQL editor access in this session; the migration was applied beforehand by the orchestrator. Please confirm in the SQL editor.
+- Step 2: `RUN_SUPABASE_TESTS=1 npm test` → 13 files passed, 108 tests passed, 0 skipped (integration contract included). `npm run lint` clean; `npm run build` passes. After the run `fetch_log` total = 0 (ZZTEST cleanup worked).
+- Step 4/5 before: AAPL fetch_log rows = 0, candles = 0. After first load (browser, desktop): 1 row `{id 43, 1day, credits_used 1, status ok, candles_received 5000}`; candles = 5000, min ts 2007-01-11, max ts 2026-11-24 (latest completed US session as of 2026-11-25 NZ). Page shows chart, "Last candle: 24 Nov 2026 · Source: Twelve Data (just fetched)", footer TradingView notice and link.
+- Step 6: reloaded twice (phone viewport, then desktop) plus `curl /api/candles/AAPL` → `cache 5000`. fetch_log AAPL rows before 1, after 1 (id 43 only); candles still 5000. Acceptance #3 met.
+- Step 7: `/chart/ZZZZQX` shows `No US ticker "ZZZZQX" was found at Twelve Data.`; 1 fetch_log row `{id 44, status not_found, credits 1}`.
+- Step 8: 3 parallel curls on never-loaded MSFT → 200, 200, 200; MSFT fetch_log rows = 1 (`id 45, ok, 5000`); candles 5000.
+- Step 9: Playwright request log on `/chart/AAPL` (first load and repeats): only `GET /chart/AAPL` and `GET /api/candles/AAPL` (plus `/_next/` assets); no external requests.
+- Step 10 (Vercel preview): PENDING, needs Tom (Vercel not linked).
+- Step 11 (next-trading-day refresh): not yet possible; do on the next US trading day (expect exactly 1 new ok row).
+
+**API credits used:** 3 in this task (AAPL, ZZZZQX, MSFT), plus 1 earlier key check = 4 today. ZZZZQX and MSFT were ~9 s apart, AAPL ~80 s before; peak 2/min.
+
+**Issues / notes**
+- Backfill returned exactly 5000 bars from 2007-01-11 (hit the outputsize cap, as planned).
+- One transient `fetch failed` on a Supabase count query via the proxy; retry succeeded. Not an app error.
+- Acceptance boxes for Phase 1 can be ticked except the Vercel step.
+
+### P1-T9 – RLS check (run by orchestrator via Supabase Management API)
+`select relname, relrowsecurity from pg_class where relnamespace='public'::regnamespace ...` →
+candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all true).

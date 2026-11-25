@@ -1,20 +1,20 @@
 VERDICT: APPROVED
 
-Review of P1-T8 (round 1).
+Task: P1-T9 (live acceptance proof), round 1.
 
-Checks run by the reviewer
-- `npm run build`: passes, lists `ƒ /chart/[symbol]`. `npm run lint`: clean. `npm test`: 12 files passed, 1 skipped; 98 passed, 10 skipped.
-- Leak check with dummy values: LEAK_CHECK_OK.
-- v5 grep: no `add*Series(` v4 calls; `addSeries(CandlestickSeries` appears once (components/candle-chart.tsx:28).
-- Browser check (Playwright/Chromium, `.env.local` moved aside, `next start -p 3100`): `/chart/AAPL` renders the `role="alert"` box "Server configuration is incomplete."; footer shows the TradingView notice and a link to https://www.tradingview.com/; no page errors. Screenshot: docs/evidence/p1-t8-error-state.png. `.env.local` restored and confirmed (`.env.local.bak` gone).
+Checks run offline: `npm run build` passes, `npm run lint` clean, `npm test` 98 passed / 10 skipped (the Supabase integration file is skipped without RUN_SUPABASE_TESTS; PROGRESS.md records the 108/108 live run).
 
-Constraints
-- API key: client code only calls `/api/candles/...`; no secrets in `.next/static`.
-- Chart cleanup: `chart.remove()` on effect cleanup. `autoSize`, `attributionLogo` set.
-- NZ time: `timeFormatter` and `tickMarkFormatter` use the Pacific/Auckland formatters from lib/time/display.
-- Robustness: network failure, unparsable body, empty candles, 429/500 messages and busy-503 retry (capped, cancel-aware) all handled without a crash.
-- No `any` types. Scope matches the plan.
+Acceptance criteria:
+- Chart shows daily candles: met. The desktop and phone screenshots show AAPL candles, last candle 24 Nov 2026.
+- Cache-first, fetch and store when empty: met. fetch_log went 0 to 1 row (ok, 5000 candles) and candles went 0 to 5000.
+- Second load makes zero API calls: met. Three further loads (phone, desktop, curl) left AAPL fetch_log at 1 row. The phone screenshot shows "Source: Supabase cache".
+- Attribution in the footer: met. The TradingView notice and link appear in all three screenshots.
+- Extras: bad ticker gives a clear message and a not_found log row; 3 parallel MSFT requests gave 1 fetch; the browser made no external requests.
+- RLS: the orchestrator's pg_class check shows candles, fetch_log, indicator_prefs and watchlist all true.
+- Credits used: 4 for the day, within budget.
 
-Optional
-1. app/globals.css: the `footer` rule is now declared twice (the new block at the end duplicates the earlier one with a slightly different font-size). Remove one.
-2. `ChartView` has no render tests beyond the footer (the plan did not ask for any).
+Not blocking (as agreed): Vercel preview (needs Tom) and the next-trading-day refresh check.
+
+Optional:
+- Edit the PROGRESS.md "Step 1: NOT run" line to point at the orchestrator RLS section below it, so the record doesn't contradict itself.
+- Tick the Phase 1 boxes in PLAN.md when the orchestrator closes the phase, noting the Vercel and refresh items as outstanding.
