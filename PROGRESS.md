@@ -305,3 +305,25 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 
 **Issues / notes**
 - None. The plan's `WatchlistRefreshResponse` reuses `Notice` from `lib/candles/api-types.ts`.
+
+### P2-T6 – Watchlist store (RLS-scoped) + watchlist service (awaiting review)
+
+**What changed**
+- New `lib/watchlist/limits.ts`: `MAX_WATCHLIST_ITEMS = 30`, `REFRESH_PACE_MS = 10_000`, `REFRESH_BUSY_RETRY_MS = 3_000`, `MAX_REFRESH_BUSY_RETRIES = 3`.
+- New `lib/watchlist/watchlist-store.ts`: `WatchlistRow`, `WatchlistStore` (`list`, `insert` -> `"ok" | "duplicate"`, `remove` -> boolean, `setSortOrders`). Errors throw the existing `StoreError`.
+- New `lib/watchlist/supabase-watchlist-store.ts` (`server-only`): `createSupabaseWatchlistStore(client: SupabaseClient<Database>)`, for the user-scoped server client only. `list` orders `sort_order, created_at`; `insert` sends `{symbol, sort_order}` only (no `user_id`, column default `auth.uid()`), 23505 -> `"duplicate"`; `remove` = `delete().eq("symbol").select("symbol")` -> rows returned > 0; `setSortOrders` = one `update({sort_order}).eq("symbol")` per row via `Promise.all`, first error -> `StoreError`.
+- New `test/helpers/memory-watchlist-store.ts`: same semantics (insertion order stands in for `created_at`), `failNext(method)`, `rows()`.
+- New `lib/watchlist/watchlist-service.ts` (`server-only`): `listWatchlist`, `addToWatchlist`, `removeFromWatchlist`, `reorderWatchlist`, `refreshWatchlistSymbol` as specified. A shared `guardStore` wrapper turns any `StoreError` into 503 `cache_unavailable` (logged); private `readQuote` reads the last 2 cached daily candles + last ok fetch (0 credits). Add order: parse -> duplicate (409) -> full (409) -> `checkUsSymbol` (failure returned as is) -> insert at `max(sortOrder)+1` (or 0) -> cached quote. Refresh: parse -> not in list (404, 0 calls) -> `getChartCandles` (failure returned as is) -> quote from the last 2 returned candles.
+- Tests: `supabase-watchlist-store.test.ts` (10, fake fetch) and `watchlist-service.test.ts` (38 incl. parameterised cases; plan cases 1–15 plus extras: first add gets 0, invalid-symbol message, insert failure -> 503, candle cache failure in list -> 503, unchanged reorder makes no update, refresh failure passthrough (429), refresh/remove invalid symbol).
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm test`: 27 files passed, 1 skipped; 257 passed, 11 skipped (was 209 + 11; +48 new); `npm run build` passes (same routes as T5).
+- `grep -rn "createSupabaseAdminClient" lib/watchlist` -> no output.
+- Service tests use a distinct synthetic symbol per test (`getChartCandles` in-flight map).
+
+**API credits used:** 0 (FakeProvider, MemoryCandleStore, MemoryWatchlistStore and fake fetch only; no Supabase or Twelve Data calls).
+
+**Issues / notes**
+- Reorder validation reads "each passing `normaliseSymbol` to the same value" as `normaliseSymbol(s) === s`, so a lower-case or padded symbol (`"bada"`) is a 400 `invalid_body`. The client always sends the symbols it got from `GET /api/watchlist`, which are already normalised.
+- Plan case 11 (`[C,A,B]` from `[A,B,C]`): with sort orders 0,1,2 every row changes, so "only the changed rows" is proved by seeding A=1, B=2, C=5 (only C is updated); the 0,1,2 case is a separate test (all three updated).
+- No opt-in Supabase integration test for the watchlist store in this task (the plan has none; it needs a real user session, which arrives with O2 / P2-T9).
