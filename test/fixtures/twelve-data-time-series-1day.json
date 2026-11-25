@@ -1,0 +1,12 @@
+{
+  "meta": { "symbol": "TEST", "interval": "1day", "currency": "USD", "exchange_timezone": "America/New_York", "exchange": "NASDAQ", "type": "Common Stock" },
+  "values": [
+    { "datetime": "2026-11-24", "open": "150.10000", "high": "152.00000", "low": "149.50000", "close": "151.25000", "volume": "1200000" },
+    { "datetime": "2026-11-21", "open": "149.00000", "high": "150.50000", "low": "148.20000", "close": "150.00000", "volume": "1100000" },
+    { "datetime": "2026-11-20", "open": "148.00000", "high": "149.80000", "low": "147.60000", "close": "149.10000" },
+    { "datetime": "2026-11-19", "open": "147.50000", "high": "148.90000", "low": "146.90000", "close": "148.00000", "volume": "900000" },
+    { "datetime": "2026-11-18", "open": "146.00000", "high": "147.80000", "low": "145.70000", "close": "147.40000", "volume": "950000" },
+    { "datetime": "2026-11-17", "open": "145.00000", "high": "146.50000", "low": "144.30000", "close": "146.10000", "volume": "1000000" }
+  ],
+  "status": "ok"
+}

@@ -62,3 +62,20 @@
 **API credits used:** 0
 
 **Issues:** none. Display tests compare after normalising whitespace, as the plan allows.
+
+### P1-T4 – Data provider interface + Twelve Data implementation (built, awaiting code review)
+
+**What changed**
+- `lib/data-provider/types.ts`: `Interval`, `SUPPORTED_INTERVALS`, `Candle`, `DataProvider`, `ProviderError` (kinds per plan).
+- `lib/data-provider/twelve-data.ts` (`server-only`): `TwelveDataProvider`, `INITIAL_OUTPUTSIZE = 5000`. Key sent in the `Authorization: apikey` header only; no `order` param; error-in-HTTP-200 handled; values sorted ascending and de-duped by ts.
+- `lib/data-provider/index.ts`: `getDataProvider()` (single switch point).
+- `lib/data-provider/twelve-data.test.ts` and `test/fixtures/twelve-data-time-series-1day.json` (6 synthetic bars, newest first, 3rd without volume).
+
+**Proof**
+- `npm run build`, `npm run lint`, `npx tsc --noEmit` pass; `npm test`: 6 files, 41 tests passed (15 new, all with a fake fetch that asserts host `api.twelvedata.com`; nothing hits the network).
+- URL param sets asserted exactly for backfill and incremental calls, `order` absent in both.
+- `grep -rn "twelvedata" app components`: no output.
+
+**API credits used:** 0
+
+**Issues:** none.

@@ -1,20 +1,18 @@
 VERDICT: APPROVED
 
-Task P1-T3, round 1.
+Task: P1-T4 (round 1)
 
-Checks run: `npm run build`, `npm run lint` and `npm test` all pass (5 files, 27 tests).
+Checks run: `npm run build`, `npm run lint` and `npm test` all pass (6 files, 41 tests). No real API calls were made.
 
-Findings:
-- Stale rule in `lib/time/market-calendar.ts` matches the PLAN.md "Stale rule" section.
-  - The 18:00 cutoff is inclusive and uses minute-level comparison.
-  - Weekends step back to Friday, including after 18:00 on Sunday.
-  - Offsets come from `Intl.formatToParts`, with no hard-coded -4/-5.
-  - `zonedDateTimeToUtc` is two-pass. 18:00 never falls in the 02:00 DST gap, so the Oct/Nov/Mar cutoff cases are correct.
-  - `isDailyCacheFresh` implements clauses (a) and (b) as specified.
-- Storage stays in UTC (`dateToDailyTs`, `dailyTsToDate` accept `+00:00`). Display is fixed to Pacific/Auckland with en-NZ. This matches the plan.
-- `normaliseSymbol` regex matches the plan.
-- No scope creep. Only the planned files plus the PROGRESS.md update.
+Verified:
+- The key is only in the `Authorization: apikey` header. It is not in the URL, and error messages contain only Twelve Data's message text or fixed strings.
+- There is no `order` param. The exact param sets are tested for backfill and incremental calls.
+- HTTP-200 error bodies are mapped via `json.status === "error"`. 429, 401, 403, 404, 400 (no data returns `[]`, symbol returns `not_found`, otherwise `bad_response`) and 5xx are all handled. Non-JSON bodies, fetch rejection and timeout are handled without crashing.
+- `DataProvider.getCandles(symbol, interval, from?)` matches the brief.
+- Values are validated, sorted ascending and de-duped.
+- `getDataProvider()` is the single switch point.
+- No stray `any`. Nothing was built beyond the task.
 
 Optional:
-- Unlike the other two files, `symbol.test.ts` was not checked case by case against the plan list.
-- `nzTickMarkLabel` uses `default` for tick types 3 and 4. This is fine.
+- The fixture includes 2026-11-21, which is a Saturday. The plan said weekdays. This is harmless synthetic data.
+- `Number(json.code)` gives NaN if `code` is missing. It correctly falls through to `bad_response`.
