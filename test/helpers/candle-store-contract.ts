@@ -62,6 +62,15 @@ export function runCandleStoreContract(
       expect(got.find((c) => c.ts.startsWith("2026-11-19"))?.close).toBe(99);
     });
 
+    it("getRecentCandles returns the last N ascending, and [] for an unknown series", async () => {
+      const symbol = `${symbolPrefix}RECENT`;
+      await store.upsertCandles(symbol, "1day", [bar(20, 12), bar(18, 10), bar(19, 11)]);
+      const got = await store.getRecentCandles(symbol, "1day", 2);
+      expect(got.map((c) => c.ts)).toEqual(["2026-11-19T00:00:00.000Z", "2026-11-20T00:00:00.000Z"]);
+      expect(got[1]).toEqual(bar(20, 12));
+      expect(await store.getRecentCandles(`${symbolPrefix}RNONE`, "1day", 2)).toEqual([]);
+    });
+
     it("upserting an empty array is a no-op", async () => {
       await expect(store.upsertCandles(`${symbolPrefix}EMPTY`, "1day", [])).resolves.toBeUndefined();
     });

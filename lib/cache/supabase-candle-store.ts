@@ -8,6 +8,26 @@ const PAGE_SIZE = 1000;
 const MAX_PAGES = 50;
 const UNIQUE_VIOLATION = "23505";
 
+interface CandleRow {
+  ts: string;
+  open: number | string;
+  high: number | string;
+  low: number | string;
+  close: number | string;
+  volume: number | string | null;
+}
+
+function toCandle(r: CandleRow): Candle {
+  return {
+    ts: new Date(r.ts).toISOString(),
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+    volume: r.volume === null ? null : Number(r.volume),
+  };
+}
+
 function fail(operation: string, error: { message: string }): never {
   throw new StoreError(`Supabase ${operation} failed: ${error.message}`, error);
 }
@@ -40,16 +60,19 @@ export function createSupabaseCandleStore(client: SupabaseClient<Database>): Can
           .order("ts", { ascending: true })
           .range(from, to),
       );
-      return rows.map(
-        (r): Candle => ({
-          ts: new Date(r.ts).toISOString(),
-          open: Number(r.open),
-          high: Number(r.high),
-          low: Number(r.low),
-          close: Number(r.close),
-          volume: r.volume === null ? null : Number(r.volume),
-        }),
-      );
+      return rows.map(toCandle);
+    },
+
+    async getRecentCandles(symbol, interval, count) {
+      const { data, error } = await client
+        .from("candles")
+        .select("ts,open,high,low,close,volume")
+        .eq("symbol", symbol)
+        .eq("interval", interval)
+        .order("ts", { ascending: false })
+        .limit(count);
+      if (error) fail("getRecentCandles", error);
+      return (data ?? []).map(toCandle).reverse();
     },
 
     async getLatestCandleTs(symbol, interval) {

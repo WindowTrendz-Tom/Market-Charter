@@ -285,3 +285,23 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 
 **Issues / notes**
 - The `fetch_log` log-row interval for searches is the literal `"symbol_search"` (constant `SEARCH_LOG_INTERVAL` in `check-us-symbol.ts`). `getLastOkFetchAt` still takes `Interval` only, as the plan says, so search rows can't be read back through it.
+
+### P2-T5 – Recent candles read, quote maths, display formatters (awaiting review)
+
+**What changed**
+- `lib/cache/candle-store.ts`: `getRecentCandles(symbol, interval, count)` added to `CandleStore` (last `count` candles, ascending).
+- `lib/cache/supabase-candle-store.ts`: implements it (`order ts desc`, `limit count`, reversed; error gives `StoreError("Supabase getRecentCandles failed: ...")`). Row-to-`Candle` mapping extracted into a shared `toCandle` used by `getCandles` too (no behaviour change).
+- `test/helpers/memory-candle-store.ts`: memory implementation using `enter("getRecentCandles")`.
+- `test/helpers/candle-store-contract.ts`: new case (3 candles, last 2 ascending; unknown series gives `[]`).
+- `lib/cache/supabase-candle-store.test.ts`: 2 new tests (URL has `order=ts.desc` and `limit=2`, ascending result; 500 gives `StoreError`).
+- New `lib/watchlist/api-types.ts` (types only), `lib/watchlist/quote.ts` (`toQuote`, imports only `market-calendar`, no `server-only`), `lib/watchlist/format.ts` (`formatPrice`, `formatChangePct`, `changeClass`; browser-safe), with `quote.test.ts` (8) and `format.test.ts` (8).
+
+**Proof**
+- `npm run build`, `npm run lint`, `npx tsc --noEmit` clean. `npm test`: 25 files passed, 1 skipped; 209 passed, 11 skipped.
+- Opt-in Supabase run (`RUN_SUPABASE_TESTS=1`): 26 files, 220 tests all passed, so the new contract case also passes against real Supabase.
+- `quote.ts` imports only `@/lib/data-provider/types` (type), `@/lib/time/market-calendar` and `./api-types` (type).
+
+**API credits used:** 0.
+
+**Issues / notes**
+- None. The plan's `WatchlistRefreshResponse` reuses `Notice` from `lib/candles/api-types.ts`.

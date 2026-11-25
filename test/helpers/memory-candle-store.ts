@@ -73,6 +73,13 @@ export class MemoryCandleStore implements CandleStore {
     return [...(series?.values() ?? [])].sort((a, b) => a.ts.localeCompare(b.ts)).map((c) => ({ ...c }));
   }
 
+  async getRecentCandles(symbol: string, interval: Interval, count: number) {
+    this.enter("getRecentCandles");
+    const series = this.candles.get(this.key(symbol, interval));
+    const sorted = [...(series?.values() ?? [])].sort((a, b) => a.ts.localeCompare(b.ts));
+    return (count > 0 ? sorted.slice(-count) : []).map((c) => ({ ...c }));
+  }
+
   async getLatestCandleTs(symbol: string, interval: Interval) {
     this.enter("getLatestCandleTs");
     const series = this.candles.get(this.key(symbol, interval));

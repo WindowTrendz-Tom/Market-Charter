@@ -87,6 +87,22 @@ describe("createSupabaseCandleStore (fake fetch)", () => {
     expect(JSON.parse(calls[1].body)).toMatchObject({ status: "pending", credits_used: 1, created_at: now.toISOString() });
   });
 
+  it("getRecentCandles orders descending, limits, and returns ascending", async () => {
+    const { store, calls } = setup(() => json([row(2), row(1)]));
+    const got = await store.getRecentCandles("TEST", "1day", 2);
+    const url = decodeURIComponent(calls[0].url);
+    expect(url).toContain("order=ts.desc");
+    expect(url).toContain("limit=2");
+    expect(got.map((c) => c.ts)).toEqual(["2020-01-02T00:00:00.000Z", "2020-01-03T00:00:00.000Z"]);
+    expect(typeof got[0].close).toBe("number");
+  });
+
+  it("getRecentCandles throws StoreError on a failed request", async () => {
+    const { store } = setup(() => json({ message: "boom" }, 500));
+    await expect(store.getRecentCandles("TEST", "1day", 2)).rejects.toBeInstanceOf(StoreError);
+    await expect(store.getRecentCandles("TEST", "1day", 2)).rejects.toThrow(/getRecentCandles failed/);
+  });
+
   it("(d) a 500 response throws StoreError", async () => {
     const { store } = setup(() => json({ message: "boom" }, 500));
     await expect(store.getCandles("TEST", "1day")).rejects.toBeInstanceOf(StoreError);

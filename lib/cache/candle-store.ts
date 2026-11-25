@@ -15,6 +15,8 @@ export interface FetchCompletion {
 export interface CandleStore {
   /** Ascending by ts, all rows. */
   getCandles(symbol: string, interval: Interval): Promise<Candle[]>;
+  /** Last `count` candles, ascending by ts. */
+  getRecentCandles(symbol: string, interval: Interval, count: number): Promise<Candle[]>;
   /** ISO UTC, or null when the series is empty. */
   getLatestCandleTs(symbol: string, interval: Interval): Promise<string | null>;
   upsertCandles(symbol: string, interval: Interval, candles: Candle[]): Promise<void>;
