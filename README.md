@@ -15,4 +15,6 @@ Copy `.env.example` to `.env.local` and fill in the values. Never commit real ke
 
 ## Database setup
 
-See P1-T2.
+1. Create a Supabase project.
+2. Paste `supabase/migrations/20261125000000_initial_schema.sql` into the SQL Editor and run it, or run `supabase db push` if the CLI is linked.
+3. Copy the Project URL and a **secret** key (Project Settings > API) into `.env.local`.

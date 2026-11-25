@@ -24,3 +24,27 @@
 **API credits used:** 0
 
 **Issues:** none. Note: `/chart/AAPL` link on the home page 404s until P1-T8, as planned.
+
+### P1-T2 – Supabase schema migration, DB types, env and admin client (built, awaiting code review)
+
+**What changed**
+- `supabase/migrations/20261125000000_initial_schema.sql`: exact SQL from PLAN.md (4 tables, RLS on, explicit grants, owner policies, one-pending-per-series lease index). Not applied to any live Supabase project.
+- `lib/supabase/database.types.ts`: hand-written `Json` and `Database` types per the plan mapping.
+- `lib/env.ts`: `ConfigError` (names only), `getTwelveDataApiKey`, `getSupabaseAdminConfig`; trims, empty = missing.
+- `lib/supabase/admin.ts`: `createSupabaseAdminClient(options?: { fetch })`, no module-level client.
+- `lib/env.test.ts`: 6 tests (missing names, whitespace, present values, message does not leak values).
+- `README.md`: "Database setup" filled in.
+
+**Proof**
+- `npm run build`, `npm run lint` pass; `npm test`: 2 files, 9 tests passed.
+- process.env grep (non-test source outside lib/env.ts): no output.
+- Local throwaway PG16 validation (server stopped and temp dir removed afterwards):
+  - `MIGRATION_OK`
+  - service_role: first pending AAPL/1day insert OK; second: `ERROR: duplicate key value violates unique constraint "fetch_log_one_pending_per_series"`
+  - anon `select * from candles`: `ERROR: permission denied for table candles`
+  - `relrowsecurity`: candles, fetch_log, indicator_prefs, watchlist all `t` (4 rows)
+  - authenticated as user 2 inserting watchlist row for user 1: `ERROR: new row violates row-level security policy for table "watchlist"`
+
+**API credits used:** 0
+
+**Issues:** none. `admin.ts` is not yet type-checked against a real project; `next build` type-checks it only if imported (it is not yet imported by a route), and vitest does not type-check. `npx tsc --noEmit` passes (checked separately).
