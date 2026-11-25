@@ -1,874 +1,1065 @@
-# PLAN – Phase 1: Chart for one ticker
+# PLAN – Phase 2: Watchlist
 
-Planner draft, round 2 (2026-11-25). Revised after PLAN_REVIEW.md round 1; see "Review round 1 fixes" at the bottom.
+Planner draft, round 1 (2026-11-25). Phase 1 is done and its plan is archived at `docs/plans/PLAN-phase1.md`. `PLAN_REVIEW.md` still holds the Phase 1 verdict and was not used for this round.
 
 ---
 
 ## Verified facts (checked 2026-11-25, not from memory)
 
-### Versions (`npm view`, Node 22.23.5 / npm 10.9.9 installed)
-| Package | Latest | Use in Phase 1 |
+### Packages (`npm view`, plus the 0.12.7 tarball unpacked in scratch)
+| Package | Latest | Use in Phase 2 |
 |---|---|---|
-| `next` / `create-next-app` | 16.4.6 | Yes. Scaffold with `create-next-app@16.4.6`; it pins `next` 16.4.6, `react`/`react-dom` 19.3.0, `eslint` ^9 (9.39.5), `eslint-config-next` 16.4.6, `typescript` ^5 |
-| `lightweight-charts` | 5.3.0 | Yes, pinned exact |
-| `@supabase/supabase-js` | 2.119.2 | Yes, pinned exact |
-| `server-only` | 0.0.1 | Yes, pinned exact |
-| `vitest` | 5.1.1 | Yes (dev), pinned exact |
-| `technicalindicators` | 3.1.0 (last published 2023-07-12) | **Not installed until Phase 3** |
-| `@supabase/ssr` | 0.12.7 | **Not installed until Phase 2** (auth) |
-| `typescript` | npm latest is 7.0.2 | Keep the template's `^5`. Don't upgrade to TS 7 |
+| `@supabase/ssr` | 0.12.7 (2026-09-08). Peer: `@supabase/supabase-js ^2.114.0`. We have 2.119.2 | **Install, pinned exact** |
+| `@supabase/supabase-js` | 2.119.2 | Already installed. No change |
+| `technicalindicators` | Not needed yet | Not installed (Phase 3) |
 
-### Scaffolding: checked by running it in a scratch dir
-- `create-next-app` **refuses to run in this repo** because `BUILD_LOOP.md` "could conflict". P1-T1 therefore scaffolds into a temp dir and copies the files in.
-- `--yes` adds `cacheComponents: true` and `partialPrefetching: true` to `next.config.ts` unless `--no-cache-components` is passed. We pass it, which keeps the ordinary dynamic-route model.
-- The template's `.gitignore` has `.env*`, which would **ignore `.env.example`**. The merged `.gitignore` adds `!.env.example`.
-- The template's `@types/node@^20` **conflicts with `vitest@5.1.1`** (peer `^22 || >=24`). npm fails with ERESOLVE. Fix: `@types/node@^22`. With that change, install, `vitest run`, `eslint` and `next build` all passed in scratch.
-- The Next 16 `lint` script is plain `eslint` (flat config). `next lint` no longer exists.
-- `eslint-config-next` 16 ships `react-hooks` v7, and its rule `react-hooks/set-state-in-effect` **errors** on a synchronous `setState()` inside `useEffect` (verified). Client components must set state only after an `await` or in callbacks.
-- Importing `server-only` under Vitest **throws**. Fix: alias it to an empty stub in `vitest.config.mts` (verified).
-- In Vitest 5, `resolve.tsconfigPaths: true` resolves `@/…` imports. `.test.tsx` files using `react-dom/server` `renderToStaticMarkup` run in the `node` environment with no extra plugin (both verified).
-- Next 15+/16: `params` in pages and route handlers is a **Promise** and must be awaited.
+- `@supabase/ssr` 0.12.x only supports `cookies: { getAll, setAll }`. The old `get`/`set`/`remove` methods are deprecated.
+- **`setAll(cookiesToSet, headers)` takes a second argument:** cache headers (`Cache-Control: private, no-cache, no-store…`, `Expires: 0`, `Pragma: no-cache`). The proxy must copy them onto the response, so a CDN never caches a response that carries a session cookie.
+- `createServerClient` loads the session lazily. The first `getClaims()` / `getUser()` / `getSession()` call triggers a token refresh, which writes cookies through `setAll`. Supabase's guidance is to call `getClaims()` straight after creating the client in the proxy, with **no code in between**.
+- **Use `getClaims()` for authorisation, never `getSession()`, on the server.** `getClaims()` verifies the JWT signature. Our project's signing keys are **ES256 (in use)** plus the previous HS256, checked via the Management API. With ES256 the check is local against a cached JWKS, so there's no Auth round trip per request.
 
-### lightweight-charts 5.3.0: from the installed package's `typings.d.ts` and README
-- `chart.addSeries(definition, options?, paneIndex?)`, e.g. `chart.addSeries(CandlestickSeries, {}, 0)`. The typings contain **no** `addCandlestickSeries`.
-- `createChart(container, { autoSize, layout: { attributionLogo }, localization: { locale, timeFormatter }, timeScale: { tickMarkFormatter } })` all exist. `tickMarkFormatter(time, tickMarkType, locale)` takes `TickMarkType` = Year 0, Month 1, DayOfMonth 2, Time 3, TimeWithSeconds 4.
-- Time type: `UTCTimestamp` (seconds), `BusinessDay` or string.
-- `layout.attributionLogo` defaults to `true` and shows a TradingView link on the chart. Licence (README): *"You shall add the 'attribution notice' from the NOTICE file and a link to https://www.tradingview.com/ to the page."* The NOTICE file is **not** in the npm package. Its text on GitHub is `TradingView Lightweight Charts™ / Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/`. The upstream "(с)" uses a Cyrillic "с", so we write a Latin "(c)". We do both: the footer notice (required by the brief) and keep `attributionLogo: true`.
+### Next.js 16.4.6 (from `node_modules/next/dist/docs/`)
+- **`middleware.ts` is deprecated and renamed `proxy.ts`.** It lives at the project root, next to `app/`. The export is `export function proxy(request: NextRequest)` (or default), plus `export const config = { matcher: [...] }`. The proxy runs on the **Node.js runtime** by default, and the `runtime` option is not allowed there.
+- The proxy is for "optimistic checks" only. The docs say it should not be the only auth gate. **Every Route Handler and Server Action must check auth itself.** Layouts don't re-render on client navigation, so a layout check is not a security boundary either.
+- `cookies()` is async. It can **set** cookies only in Server Functions (Server Actions) and Route Handlers, not while rendering a Server Component. `redirect()` throws, so it must not sit inside a `try` that swallows it.
+- Server Actions get a built-in Origin/Host CSRF check. They still have to validate their input and authenticate themselves.
+- `params` and `searchParams` are Promises (as in Phase 1).
 
-### Twelve Data
-`twelvedata.com` and `api.twelvedata.com` are **blocked from this cloud session** (DNS/proxy 403). These facts come from Twelve Data's published OpenAPI document (via the generated client `psyb0t/go-twelvedata` `client.gen.go`), the official `twelvedata-python` client source, and web search.
-- `GET https://api.twelvedata.com/time_series`. Params used: `symbol`, `interval` (`1day`), `outputsize` (1–5000; default 30 when no date params, **maximum when `start_date`/`end_date` are set**), `start_date` (`YYYY-MM-DD`, **inclusive**: "returns all records starting from"; for stocks it is read in the exchange's timezone), `order` (`asc`|`desc`, default desc). **We never send `order`.** The docs don't say whether `order=asc` with `outputsize=5000` and no dates returns the newest or the oldest 5000 bars. The default `desc` (newest first) with `outputsize=5000` returns the latest 5000 bars, and we sort ascending locally.
-- `timezone` is **ignored for `1day`/`1week`/`1month`**. Daily data always comes back in exchange-local time, and a daily `datetime` is a date such as `2026-11-24`. *This contradicts any idea of asking Twelve Data for UTC daily bars*, so we convert ourselves (see "Time rules").
-- Values are **strings** (`"open": "148.73500"`). `volume` may be absent. Response shape: `{ meta: {...}, values: [...], status: "ok" }`.
-- Errors: JSON `{ "status": "error", "code": <int>, "message": "..." }`. The official Python client checks **both** the HTTP status and the JSON `code`, because an error can arrive with HTTP 200. Codes in the spec: 400 (bad params), 401 (invalid key), 403 (not on your plan), 404, 414, **429** ("You have run out of API credits for the current minute…"), 500.
-- Auth: `Authorization: apikey <key>` header is supported, so the key never appears in the URL.
-- Cost: time_series is **1 credit per symbol**, whatever the `outputsize` (Twelve Data docs, via search).
-- Basic plan: **800 credits/day, resets at midnight UTC** (OpenAPI `/api_usage` description). **8/min** comes from the brief; I could not re-check it independently because the docs host is blocked.
-- *Unverified:* recalled from memory, a request whose range holds no bars returns a 400 "No data is available on the specified dates". The design avoids this case (`start_date` = last cached date, inclusive) and handles it defensively anyway.
+### Supabase's Next.js SSR pattern (Supabase docs via the MCP doc search; supabase.com itself is blocked here)
+- Files: `lib/supabase/server.ts` (`createServerClient` + `cookies()`, with `setAll` wrapped in try/catch for Server Components), `lib/supabase/proxy.ts` (`updateSession`) and the root `proxy.ts`.
+- The matcher excludes `_next/static`, `_next/image`, `favicon.ico` and image files.
+- Env var name: **`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`**. Our project has a `publishable default` key, checked via the Management API (key types only; no values were read).
 
-### Supabase
-- New projects use **publishable** (`sb_publishable_…`, replaces `anon`) and **secret** (`sb_secret_…`, replaces `service_role`) keys. Legacy keys still work where they exist. *The brief says "anon key + service role key"*, so we name env vars `SUPABASE_SECRET_KEY` (either key type works) and, in Phase 2, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
-- **Tables are no longer exposed to the Data API automatically.** This became the default for new projects on 30 May 2026 and is enforced on all projects from 30 Oct 2026. The migration must `GRANT` explicitly, otherwise PostgREST returns 42501 (Supabase docs, "Securing your API").
-- PostgREST returns at most 1000 rows per request (Supabase default "Max rows"), so reads must paginate.
-- The draft migration below was **run on local PostgreSQL 16** with stubbed Supabase roles and `auth.uid()`:
-  - It applies cleanly.
-  - `service_role` can insert into an identity column without a sequence grant.
-  - The partial unique index blocks a second `pending` lease.
-  - `anon` gets "permission denied" on `candles`.
-  - RLS blocks a user inserting a row for another user.
-  - `UNIQUE NULLS NOT DISTINCT` rejects a second default (`symbol IS NULL`) pref.
-- `supabase-js` 2.119.2 accepts `global.fetch` (used to unit-test the store). A hand-written `Database` type in `supabase gen types` format type-checks with select, insert and upsert (verified with `tsc`).
+### Email auth: decision = **email + password**, not magic link
+Live project auth config, read via the Management API:
+- `external_email_enabled: true`
+- `disable_signup: false` (**strangers can sign up today**)
+- `smtp_host` unset (Supabase's built-in SMTP)
+- `rate_limit_email_sent: 2` per hour
+- `site_url: http://localhost:3000`, `uri_allow_list: ""`
+- `password_min_length: 6`
+- `auth.users` count = 0
 
-### Things that differ from the brief (none block the plan)
-1. Supabase key names (above).
-2. The brief says "fetch only candles newer than the last cached one". We send `start_date = <last cached date>` (inclusive), which returns the last cached bar plus newer ones. The cost is the same (1 credit). The response is never empty, and a revised last bar gets corrected.
-3. The brief's "Before you start" steps have not been done. P1-T1 does the scaffold. Supabase, the Twelve Data key and the Vercel link need Tom (see P1-T9 and Open questions).
+Supabase docs ("Send emails with custom SMTP") say the built-in SMTP **only delivers to the organisation's team-member addresses**, at a tiny hourly limit, with no SLA. Magic links would therefore need one of two things: Tom's email must be a member of the Supabase org, or we add a custom SMTP service (a new service, so ask first). They would also need redirect URLs configured for localhost, Vercel previews and production, and a `/auth/confirm` route.
+
+Email + password needs **no email at all**:
+- the user is created by an admin with `email_confirm: true`;
+- `disable_signup: true` blocks public sign-ups;
+- admin/dashboard user creation still works.
+
+This is the simplest secure option for one user. The brief's "Supabase email login" is satisfied: it's Supabase's Email provider. Magic link remains a later option if Tom wants it.
+
+Management API `PATCH /v1/projects/{ref}/config/auth` fields (from the published OpenAPI spec): `disable_signup`, `password_min_length` (6–32767), `external_email_enabled`, `external_anonymous_users_enabled`, `site_url`, `uri_allow_list`.
+
+### Twelve Data `symbol_search` (via web search of `twelvedata.com/docs/llms/discovery/symbol-search.md` and `llms-full.txt`; the docs host itself is blocked here)
+- `GET https://api.twelvedata.com/symbol_search`
+- Required param: `symbol` (ticker or ISIN). Optional: `outputsize` (max 120; default ~30), `show_plan`.
+- **Cost: 1 API credit per request.** Results are ordered by relevance.
+- Response: `{ "data": [ { "symbol", "instrument_name", "exchange", "mic_code", "exchange_timezone", "instrument_type", "country", "currency" } ], "status": "ok" }`.
+  - The documented field list names only `symbol`, `instrument_name`, `country`, `currency` (and `access`). `exchange`, `mic_code` and `instrument_type` appear only in the example.
+  - **The parser therefore requires only `symbol`.** Everything else is optional, and US detection uses `country` first, then `mic_code`.
+  - **Unverified until P2-T9:** the exact `country` string for the US ("United States") and whether `mic_code` is present.
+- Errors use the same JSON `{status:"error", code, message}` shape as `time_series`, including errors inside HTTP 200.
+- Auth: the same `Authorization: apikey …` header.
+
+### `/quote` vs cached candles for the sidebar: decision = **cached candles only, no `/quote`**
+- `/quote` costs **1 credit per symbol**. A 10-ticker sidebar would cost 10 credits per view, which is over the 8/min cap on a single page load.
+- Cached daily candles give the last completed close and the previous close for **0 credits**.
+- "Last price" is therefore the **last completed session's close**, labelled with its date (e.g. "24 Nov 2026"). "Day % change" is that close against the previous session's close. This matches the brief's "from cached data where possible", and the data is the same data the chart shows.
+- A stale or cold ticker is refreshed through the existing cache-first candle service (1 credit, at most once per ticker per trading day, paced; see "Sidebar refresh").
+
+### Live project state (Management API, read-only)
+- `candles`: AAPL 5000 rows, MSFT 5000 rows.
+- `fetch_log` today: 3 rows (AAPL ok, ZZZZQX not_found, MSFT ok). Plus 1 unlogged key check, so **4 credits used today**.
+- `watchlist` holds 0 rows. It has policy `watchlist_owner_all` (`auth.uid() = user_id`).
+- `fetch_log."interval"` is free `text` with **no CHECK constraint** (only `candles."interval"` has one). So a `symbol_search` call can be logged as `interval = 'symbol_search'` with **no schema change**.
 
 ---
 
-## Phase 1 – Chart for one ticker: acceptance criteria (from the brief)
-- [ ] `/chart/[symbol]` shows daily candles for a US ticker, e.g. AAPL
-- [ ] Data comes from Supabase. If the cache is empty or stale, the API route fetches from Twelve Data and stores it
-- [ ] A second load of the same ticker makes zero API calls (check `fetch_log`)
-- [ ] Attribution notice is in the footer
+## Phase 2 – Watchlist: acceptance criteria (from the brief)
+- [ ] Supabase email login (single user is fine)
+- [ ] Add, remove and reorder tickers. The ticker is checked against the Twelve Data symbol search before it's saved
+- [ ] The sidebar watchlist shows the last price and the day's % change (from cached data where possible)
 
 Plus the definition of done: `npm run build`, `npm run lint` and `npm test` pass; proof recorded; `PROGRESS.md` updated; no secrets; `.env.example` current.
 
-| Criterion | Covered by | Provable without keys? |
+| Criterion | Covered by | Proof |
 |---|---|---|
-| Chart page shows daily candles | P1-T8 (UI), P1-T7 (route), P1-T9 (live) | Build, unit tests and v5-API grep: yes. **Real chart screenshot: needs keys** |
-| Cache first; fetch and store when empty or stale | P1-T3 (stale rule), P1-T5 (store), P1-T6 (service) | Yes (service tests with in-memory store and fake provider). **Live proof: needs keys** |
-| Second load = zero API calls | P1-T6 tests (provider call count = 0), P1-T9 (`fetch_log` count) | Unit proof: yes. **`fetch_log` proof: needs keys** |
-| Attribution in footer | P1-T8 | Yes (render test plus build) |
+| Email login | T1 (proxy, session, server client), T2 (login and logout UI, protected routes), O1–O3 (auth config, users) | Unit tests (access rules, next-path, sign-in errors, proxy cookie copy). T9 live: redirects, 401s, wrong and right password, sign-up refused |
+| Add / remove / reorder, checked with symbol search | T3 (provider search, US match), T4 (budget-guarded, logged check), T6 (service), T7 (routes), T8 (UI) | Service and route tests with fakes. T9 live: add AAPL/MSFT/NVDA, reject ZZZZQX, duplicate, invalid; reorder and remove survive a reload; `fetch_log` rows |
+| Sidebar last price + day % change from cache | T5 (recent candles, quote maths, formatters), T6/T7 (list and refresh), T8 (sidebar and paced refresh queue) | Unit tests of the quote maths. T9 live: sidebar values match SQL on the last two closes; cached tickers cost 0 credits |
+
+**Schema:** no change. The plan uses the existing `watchlist` (with `sort_order`), and `fetch_log` with `interval = 'symbol_search'`. `indicator_prefs` is untouched.
 
 ---
 
 ## Key design decisions
 
-### Architecture
-```
-Browser ──GET /api/candles/AAPL──► app/api/candles/[symbol]/route.ts   (only place the browser talks to)
-                                        │
-                                        ▼
-                         lib/candles/get-chart-candles.ts  (cache-first service: freshness, budget guard, lease)
-                           │                         │
-                           ▼                         ▼
-           lib/cache/supabase-candle-store.ts   lib/data-provider/twelve-data.ts  (server-only; key from env)
-                 (candles, fetch_log)                 implements DataProvider.getCandles(symbol, interval, from?)
-```
-- `/chart/[symbol]` is a server page that validates the symbol and renders a client `ChartView`. `ChartView` calls `/api/candles/[symbol]` and draws with lightweight-charts. The browser never sees the Twelve Data key or URL.
-- Every module that touches secrets starts with `import "server-only"`. Env vars are read lazily at request time (never at module top level), so `next build` passes without keys.
+### 1. Everything behind login, including `/chart/[symbol]` and `/api/candles/[symbol]`
+**Decision: protect all pages and all API routes. Only `/login` is public.**
 
-### Time rules (UTC storage, Pacific/Auckland display)
-- **Storage:** a daily bar for US trading date `D` (as returned by Twelve Data) is stored as `ts = D 00:00:00Z` (`timestamptz`). A daily bar's identity is its date, and midnight UTC is lightweight-charts' convention for daily data.
-- **Display:** the chart gets `time = ts` in UTC seconds. All labels are formatted with `Intl.DateTimeFormat('en-NZ', { timeZone: 'Pacific/Auckland' })`. NZ is always ahead of UTC (+12/+13), so `D 00:00Z` always shows as date `D` in NZ. For example, AAPL's 24 Nov bar is labelled "24 Nov 2026", not shifted. Intraday intervals (Phase 4) will use the same formatters, with times.
+Why:
+- The scarce shared resource is the Twelve Data budget (8/min, 800/day). `/api/candles/[symbol]` is the route that spends it.
+- Today anyone who finds the URL can request random tickers. Unknown tickers never become "fresh", so each one burns 1 credit, and that could exhaust the daily budget or block Tom for a minute at a time.
+- The brief says personal use only, and the chart data has no reason to be public.
 
-### "Stale" rule for daily candles (lib/time/market-calendar.ts)
-- **Close cutoff:** 18:00 America/New_York on a weekday. This leaves a buffer after the 16:00 close so the provider's daily bar is final. DST is handled through `Intl`, so no hard-coded offsets.
-- **Expected latest daily candle** at instant `now`:
-  1. Take NY-local date `d` of `now`.
-  2. If NY-local time is before 18:00, use the previous calendar day.
-  3. While `d` is Saturday or Sunday, step back one day.
-  4. The result is the expected date `E`.
-- **Cache is fresh** when it holds at least one candle AND either:
-  - (a) the latest cached date ≥ `E`, or
-  - (b) the last `fetch_log` row with `status='ok'` for this symbol/interval has `created_at ≥ cutoffInstant(E)`.
+The cost:
+- Phase 1-style `curl` proofs now need a session cookie.
+- A Vercel preview needs a login.
 
-  Clause (b) covers US holidays and other days with no new bar: once we have fetched after the cutoff and got nothing newer, we don't fetch again until the next cutoff. No holiday calendar is needed.
-- **Only completed bars are stored:** when storing, drop any candle whose date is after `E` (computed at fetch time). For example, Twelve Data's in-progress bar during the US session is never cached, so a cached bar is never partial.
-- **NZ example:** at 09:00 NZDT Thursday (= 15:00 ET Wednesday), `E` = Tuesday. Wednesday's bar becomes expected after 18:00 ET Wednesday (12:00 NZDT Thursday).
-- **Known limitation:** if Twelve Data publishes a bar late (after 18:00 ET), clause (b) can hide that bar until the next day's cutoff. This is acceptable for personal use.
+Both are acceptable.
 
-### Credit protection and concurrency
-- **Order of operations on a load:**
-  1. In-process de-dupe (same instance, same series: share one promise).
-  2. Freshness check (0 credits; stop here if fresh).
-  3. Local budget guard.
-  4. DB lease.
-  5. Provider call (1 credit).
-  6. Upsert.
-  7. Close the lease row.
-- **Local budget guard** reads `fetch_log`:
-  - If the sum of `credits_used` over the last 60 s is ≥ 8, it refuses without calling Twelve Data.
-  - If the sum since the latest UTC midnight is ≥ 800, it refuses likewise.
-  - On refusal, it serves the cache (if any) with a notice, otherwise returns a 429 with a clear message.
-- **Lease (prevents double-spend across serverless instances):** before calling, insert a `fetch_log` row with `status='pending', credits_used=1`.
-  - The partial unique index `(symbol, interval) WHERE status='pending'` makes a second concurrent insert fail with `23505`. That request does **not** call Twelve Data: it serves stale cache with a "refreshing" notice, or returns 503 `busy` with `Retry-After: 3` if the cache is empty.
-  - Pending rows older than 60 s are marked `expired` before inserting, so a crashed request can't lock a ticker.
-  - The same row is updated to its final status. Result: exactly one `fetch_log` row per Twelve Data call.
-- **In-process de-dupe:** a module-level `Map<key, Promise>` makes concurrent requests on the same server instance await one refresh instead of getting `busy`.
-- **Credit accounting:** every request that reaches Twelve Data is logged as 1 credit, including 429/4xx responses. This is conservative: we don't know whether Twelve Data charges rejected calls. Requests stopped by the local guard or the lease never reach Twelve Data and are not logged.
+How it is layered:
+- **`proxy.ts`** refreshes the session on every matched request. It redirects logged-out **page** requests to `/login?next=…`, and sends a logged-in user who visits `/login` to `/`. It never redirects `/api/*`.
+- **Every route handler** checks `getClaims()` itself and returns `401 {error:{code:"unauthorized"}}`.
+- **Every Server Action** that needs a user checks too. Login itself doesn't, since it is the login.
+- The `(app)` layout also redirects when there's no user (defence in depth), but it is not relied on.
 
-### Schema: create all four tables now (with RLS)
-- **Recommendation: yes.** The brief requires Tom's approval for schema changes after Phase 1. `watchlist` and `indicator_prefs` are already specified in the brief's data model, and Phases 2 and 3 need them, so creating them now avoids two stop-and-ask pauses.
-- They are inert in Phase 1: RLS is on, there are owner-only policies, and nothing reads or writes them yet.
-- The `candles.interval` CHECK already allows `1h`, `1day`, `1week` and `1month`, so Phase 4 doesn't need a schema change either.
-- Phase 5 (alerts) needs approval anyway because it's optional.
-- `candles` and `fetch_log` are not user data, but they also get RLS with **no** policies, and grants go to `service_role` only. That makes them unreachable with browser keys. Only the server, using the secret key (which bypasses RLS), touches them.
+### 2. Supabase clients: which key touches which table
+| Client | Key | Used for | Where |
+|---|---|---|---|
+| `createSupabaseAdminClient()` (Phase 1) | secret | `candles`, `fetch_log` (RLS on, no policies, service_role grants only) | Server only, unchanged |
+| `createSupabaseServerClient()` (new) | publishable + the user's JWT from cookies | `watchlist` (RLS `auth.uid() = user_id`), `auth.*` | Server only (Route Handlers, Server Actions, Server Components) |
+| Proxy client (new, inside `updateSession`) | publishable | Session refresh + `getClaims()` only | `proxy.ts` |
+
+- **There is no browser Supabase client.** Login and logout are Server Actions, and data goes through Route Handlers. So no Supabase code ships to the browser.
+- The publishable key is still named `NEXT_PUBLIC_…`, as Supabase does and as the Phase 1 plan promised. It is read only on the server.
+- Watchlist rows are only ever touched with the user-scoped client, so RLS is the real access control. The service never passes `user_id` from client input. The insert relies on the column default `auth.uid()`.
+
+### 3. Ticker validation before saving (US only)
+Add flow, cheapest checks first:
+1. `normaliseSymbol` (format).
+2. Already in the list → 409 (0 credits).
+3. List full (30) → 409 (0 credits).
+4. **`checkUsSymbol`** (1 credit):
+   - local budget guard (shared with candles; same 8/min and 800/day sums);
+   - DB lease on (`symbol`, `'symbol_search'`), which de-dupes double-clicks;
+   - `provider.searchSymbols(symbol)`;
+   - `fetch_log` row completed with 1 credit.
+5. Insert.
+
+US rule (`pickUsListing`):
+- keep only results whose `symbol` equals the ticker exactly (case-insensitive);
+- of those, accept `country === "United States"` or `mic_code` in {XNAS, XNGS, XNMS, XNCM, XNYS, ARCX, BATS, XASE, IEXG};
+- prefer `Common Stock`, then `ETF`, then the first.
+
+Outcomes:
+- An exact match listed only outside the US → 422 `not_us`.
+- No exact match → 404 `not_found`.
+
+`fetch_log` status for searches:
+- `ok` = a US listing was found;
+- `not_found` = none (the message lists up to 5 `SYMBOL@EXCHANGE(country)` results, so a field-name surprise can be debugged without another credit);
+- `rate_limited` / `error` as for candles.
+
+`sumCreditsSince` already sums every row, so search credits count towards the budget guard automatically. `getLastOkFetchAt` filters by interval, so search rows never make a candle series look fresh.
+
+### 4. Sidebar data: cache-only list + paced background refresh
+- **`GET /api/watchlist` never calls Twelve Data (0 credits).** For each row it reads the last 2 cached daily candles and the last ok fetch time, and returns:
+  - `{ symbol, quote: { lastClose, prevClose, changePct, asOf, stale } | null }`
+  - `quote: null` means nothing is cached yet (a cold ticker).
+  - `stale` uses Phase 1's `isDailyCacheFresh`, so it is holiday-aware.
+- **The refresh queue (client, in the sidebar):** after the list loads, the sidebar refreshes the tickers that are cold or stale, **one at a time, in watchlist order**, via `POST /api/watchlist/refresh {symbol}`. That route reuses `getChartCandles` (cache-first, budget guard, lease, de-dupe) and returns only the new quote, not 5000 candles.
+  - **Pacing:** after a refresh that called Twelve Data (`source: "api"`, or a provider error, since a credit was spent), the queue waits **10 s** (≤ 6 credits/min). That leaves ≥ 2/min for adding a ticker or opening a chart.
+  - Cache hits continue straight away.
+  - **On any rate limit** (429, or a cache-served `rate_limited` notice), the queue **stops** and shows: "Paused: <message> Click Retry to continue." It does not auto-retry, so it can never loop against the limit.
+  - **On busy** (another request is loading the same ticker), it retries after 3 s, at most 3 times, then skips.
+  - **On 401**, it stops and shows a log-in link.
+- **Cold sidebar example, 10 tickers, nothing cached:**
+  - the list shows 10 rows with "—" and "Not loaded yet" instantly (0 credits);
+  - the queue then backfills them at 6/min, so all are filled after about 100 s (10 credits).
+  - If something else spends credits meanwhile, the budget guard stops the queue with a clear message and the rows keep showing "—" or the cached values.
+- **Daily steady state:** each ticker goes stale once per US trading day, after 18:00 New York time (≈ noon NZ). Refreshing costs 1 credit per ticker per day (10/day for 10 tickers).
+- **Opening a chart** still uses `/api/candles/[symbol]` (unchanged). When that load actually fetched (`source:"api"`), `ChartView` fires a window event and the sidebar re-reads the list (0 credits) to pick up the new close.
+
+### 5. Reorder persistence (`sort_order`)
+- The UI has **Up / Down buttons** on each row. They're accessible and easy to drive in Playwright, and need no drag-and-drop library (no stack change).
+- The client updates optimistically, then sends `PATCH /api/watchlist {symbols:[…full new order…]}`.
+- The server:
+  1. validates the body;
+  2. reads the current rows (RLS);
+  3. if the sets differ, returns 409 `order_mismatch` (the list changed in another tab, and the client reloads);
+  4. otherwise updates **only rows whose `sort_order` changed** to their new index, one `update().eq("symbol", s)` per row.
+- No upsert is used, so a row removed in another tab can never be re-created.
+- New rows get `max(sort_order)+1`. Reads order by `sort_order, created_at`, so a tie is harmless.
+
+### 6. Limits and constants (new)
+| Constant | Value | Why |
+|---|---|---|
+| `MAX_WATCHLIST_ITEMS` | 30 | Bounds the per-row cache reads in `GET /api/watchlist` (2 small queries per row) and the refresh-queue cost (≤ 30 credits/day) |
+| `REFRESH_PACE_MS` | 10 000 | ≤ 6 credits/min from the queue |
+| `REFRESH_BUSY_RETRY_MS` / `MAX_REFRESH_BUSY_RETRIES` | 3 000 / 3 | Matches Phase 1's busy handling |
+| `AUTH_RETRY_DELAY_MS` | 1 000 | One retry on 401. It covers parallel requests racing a single-use refresh token, as `@supabase/ssr` documents |
+| `MAX_LOG_MESSAGE_LENGTH` | 500 | Moved from `get-chart-candles.ts` to `limits.ts` so it can be shared |
+
+---
+
+## Orchestrator steps (not Executor work)
+All are run by the orchestrator via the Supabase Management API (`api.supabase.com`, token injected by the proxy) or a local Node one-off. **Never print or commit key values or passwords.**
+
+| ID | When | Step | Verify |
+|---|---|---|---|
+| **O1** | Right after plan approval, before P2-T1's manual check | Read the project's `publishable` key (`GET /v1/projects/iujtvcbstjbmpfonvfuv/api-keys`, type `publishable`) and append `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<value>` to `.env.local`. Don't echo it | `grep -c '^NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=.\+' .env.local` → 1 |
+| **O2** | Before P2-T9 | Create the **E2E test user** with the admin API and `SUPABASE_SECRET_KEY` (e.g. `node -e` with `supabase-js` `auth.admin.createUser({ email: "e2e@example.com", password: <random 24 chars from crypto.randomBytes>, email_confirm: true })`, run with `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt`). Append `E2E_USER_EMAIL` and `E2E_USER_PASSWORD` to `.env.local` only | SQL: `select count(*) from auth.users where email='e2e@example.com' and email_confirmed_at is not null` → 1 |
+| **O3** | After O2, before P2-T9 | `PATCH /v1/projects/iujtvcbstjbmpfonvfuv/config/auth` with `{"disable_signup": true, "password_min_length": 12, "external_email_enabled": true, "external_anonymous_users_enabled": false}` | `GET …/config/auth` shows `disable_signup: true` and `password_min_length: 12`. P2-T9 step 3 proves a public sign-up is refused |
+| **O4** | After O3 (optional) | Run the Supabase security advisors (MCP `get_advisors`, type `security`) and paste any auth or RLS findings into PROGRESS.md | Recorded |
+| **O5** | When Tom has a Vercel production URL (later) | `PATCH …/config/auth` `{"site_url": "https://<prod-domain>"}`. Only email links use it, and we send none, so it's tidy-up, not a blocker | — |
+
+**Tom steps (not blockers for the build or proof):**
+1. Create your own account. In the Supabase dashboard go to Authentication → Users → **Add user → Create new user**, tick **Auto Confirm User**, and use a password of 12 or more characters. Admin-created users work with sign-ups disabled.
+2. When you link Vercel, add `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` next to the three existing variables.
 
 ---
 
 ## Tasks
 
-Conventions for all tasks:
-- File names use kebab-case and imports use `@/`.
-- No `any`.
-- Every test file lives next to its source (`*.test.ts(x)`) unless noted.
-- Fixture data is synthetic and labelled `// synthetic test data, not real prices`.
+Conventions (same as Phase 1):
+- kebab-case files, `@/` imports, no `any`;
+- tests sit next to their source as `*.test.ts(x)`;
+- synthetic fixtures are labelled `// synthetic test data, not real prices`;
+- client components set state only after an `await` or in callbacks (the `react-hooks/set-state-in-effect` lint rule errors otherwise);
+- every JSON route response has `Cache-Control: no-store`.
 
-### P1-T1 – Scaffold Next.js 16 app, Vitest and repo hygiene
+### P2-T1 – Auth foundation: `@supabase/ssr`, server client, session helper, `proxy.ts`
 **Files:**
-- Create: `package.json`, `package-lock.json`, `tsconfig.json`, `next.config.ts`, `eslint.config.mjs`, `AGENTS.md`, `README.md`, `vitest.config.mts`, `test/stubs/server-only.ts`, `test/env-example.test.ts`, `.env.example`, `app/layout.tsx`, `app/page.tsx`, `app/globals.css`, `app/favicon.ico`, `PROGRESS.md`
-- Change: `.gitignore`
+- Change: `package.json`, `package-lock.json`, `lib/env.ts`, `.env.example`, `test/env-example.test.ts`, `README.md`
+- Create:
+  - `lib/config-error.ts` (+ `lib/config-error.test.ts`)
+  - `lib/supabase/public-config.ts` (+ `.test.ts`)
+  - `lib/supabase/server.ts`
+  - `lib/auth/session.ts`
+  - `lib/auth/next-path.ts` (+ `.test.ts`)
+  - `lib/auth/route-access.ts` (+ `.test.ts`)
+  - `lib/supabase/proxy.ts` (+ `.test.ts`)
+  - `proxy.ts` (repo root)
 
 **Steps:**
-1. `TMP=$(mktemp -d) && cd "$TMP" && npx -y create-next-app@16.4.6 web --ts --app --eslint --no-tailwind --no-src-dir --import-alias "@/*" --use-npm --skip-install --disable-git --no-react-compiler --no-cache-components --no-agent-feedback --yes`
-2. Copy into the repo root: `cp -r "$TMP/web/app" "$TMP/web/AGENTS.md" "$TMP/web/README.md" "$TMP/web/eslint.config.mjs" "$TMP/web/next.config.ts" "$TMP/web/package.json" "$TMP/web/tsconfig.json" /home/user/Market-Charter/`. Don't copy `public/`, `next-env.d.ts` (generated, ignored) or the template `.gitignore`. Then delete `app/page.module.css`.
-3. `package.json`:
-   - set `"name": "market-charter"`
-   - set scripts to exactly `"dev": "next dev"`, `"build": "next build"`, `"start": "next start"`, `"lint": "eslint"`, `"test": "vitest run"`, `"test:watch": "vitest"`.
-4. Install, in this order:
-   1. `npm install`
-   2. `npm install -D @types/node@^22`
-   3. `npm install -D --save-exact vitest@5.1.1`
-   4. `npm install --save-exact lightweight-charts@5.3.0 @supabase/supabase-js@2.119.2 server-only@0.0.1`
-
-   Do not install `technicalindicators` or `@supabase/ssr`.
-5. `vitest.config.mts` (exact; verified working):
+1. `npm install --save-exact @supabase/ssr@0.12.7`.
+2. **`lib/config-error.ts`** (no `server-only`; the proxy imports it):
+   - Move `ConfigError` and `readEnv` here from `lib/env.ts`, unchanged, and export both.
+   - `lib/env.ts` keeps `import "server-only"`, imports `readEnv` from here, and re-exports `ConfigError` (`export { ConfigError } from "@/lib/config-error"`), so existing imports keep working.
+   - Move the generic `ConfigError` tests if needed. The `lib/env.test.ts` tests must still pass unchanged.
+3. **`lib/supabase/public-config.ts`** (no `server-only`): `getSupabasePublicConfig(): { url: string; publishableKey: string }` via `readEnv(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"])`. Test: missing names are reported; values are trimmed.
+4. **`.env.example`**: insert after the URL line:
+   ```
+   # Supabase publishable key (sb_publishable_...). Safe for the browser, but only read on the server.
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+   # Optional, local only: login used by the Playwright acceptance run. Never set in Vercel.
+   E2E_USER_EMAIL=
+   E2E_USER_PASSWORD=
+   ```
+   `test/env-example.test.ts`:
+   - (a) the required keys now include `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
+   - (c) the `NEXT_PUBLIC_` keys must equal exactly `["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]`.
+5. **`lib/supabase/server.ts`** (`import "server-only"`):
    ```ts
-   import { fileURLToPath } from "node:url";
-   import { defineConfig } from "vitest/config";
+   export async function createSupabaseServerClient(): Promise<SupabaseClient<Database>>
+   ```
+   - It is `createServerClient<Database>(url, publishableKey, { cookies: { getAll: () => cookieStore.getAll(), setAll(cookiesToSet) { try { for (const { name, value, options } of cookiesToSet) cookieStore.set(name, value, options); } catch { /* Server Component render: proxy.ts refreshes the session */ } } } })`, with `cookieStore = await cookies()`.
+   - Create a new client per call; never cache it at module level.
+   - If the return type doesn't assign to `SupabaseClient<Database>`, use `ReturnType<typeof createServerClient<Database>>` through an exported alias `ServerSupabaseClient`, and use that alias everywhere below. Don't use `any`.
+6. **`lib/auth/session.ts`** (`import "server-only"`):
+   ```ts
+   export interface SessionUser { id: string; email: string | null }
+   export interface AuthContext { supabase: SupabaseClient<Database>; user: SessionUser | null }
+   export async function getAuthContext(): Promise<AuthContext>
+   ```
+   - Create the server client, then `const { data, error } = await supabase.auth.getClaims()`.
+   - `user = data?.claims?.sub ? { id: data.claims.sub, email: typeof data.claims.email === "string" ? data.claims.email : null } : null`.
+   - On `error`, user = null (no throw).
+   - A `ConfigError` from client creation **propagates**, and callers map it to a 500.
+7. **`lib/auth/next-path.ts`**: `safeNextPath(raw: unknown): string` returns `raw` only if all of these hold:
+   - it is a string of 1–200 chars;
+   - it starts with `/`;
+   - it does not start with `//`;
+   - it contains no `\`;
+   - it does not start with `/login`.
 
-   export default defineConfig({
-     resolve: {
-       tsconfigPaths: true,
-       alias: { "server-only": fileURLToPath(new URL("./test/stubs/server-only.ts", import.meta.url)) },
-     },
-     test: {
-       environment: "node",
-       include: ["**/*.test.ts", "**/*.test.tsx"],
-       exclude: ["node_modules/**", ".next/**"],
-     },
-   });
+   Otherwise it returns `/`.
+
+   Tests: `/chart/AAPL` ok; `/chart/AAPL?x=1` ok; `//evil.com`, `/\evil.com`, `https://evil.com`, `javascript:alert(1)`, `""`, `/login`, `/login?next=/x`, a 201-char path, `null`, `42` all → `/`.
+8. **`lib/auth/route-access.ts`** (pure):
+   ```ts
+   export type AccessDecision = { action: "next" } | { action: "redirect"; location: string };
+   export function decideAccess(args: { pathname: string; search: string; hasUser: boolean }): AccessDecision
    ```
-   `test/stubs/server-only.ts` contains `export {};` plus a one-line comment explaining why it exists.
-6. `.gitignore`: replace with the union of the old file and the template, plus the `.env.example` exception:
-   ```
-   node_modules/
-   .pnp
-   .pnp.*
-   .next/
-   out/
-   build/
-   coverage/
-   .DS_Store
-   *.pem
-   npm-debug.log*
-   .env
-   .env*.local
-   .env.*
-   !.env.example
-   .vercel
-   *.tsbuildinfo
-   next-env.d.ts
-   ```
-7. `.env.example` (exact):
-   ```
-   # Copy to .env.local and fill in. Never commit real values.
-   # Twelve Data API key. Server only.
-   TWELVE_DATA_API_KEY=
-   # Supabase project URL (Project Settings > API). Not secret.
-   NEXT_PUBLIC_SUPABASE_URL=
-   # Supabase secret key (sb_secret_...) or legacy service_role key. Server only; bypasses RLS.
-   SUPABASE_SECRET_KEY=
-   ```
-8. `test/env-example.test.ts`: reads `.env.example` and asserts:
-   - (a) the keys `TWELVE_DATA_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SECRET_KEY` are present;
-   - (b) every `KEY=value` line has an empty value;
-   - (c) no key except `NEXT_PUBLIC_SUPABASE_URL` starts with `NEXT_PUBLIC_`.
-9. `app/layout.tsx`:
-   - remove `next/font/google` and the Geist fonts (avoids a build-time network fetch);
-   - `metadata = { title: "Market Charter", description: "Personal market charts" }`;
-   - `<html lang="en-NZ"><body><main>{children}</main></body></html>`;
-   - keep the `LayoutProps<"/">` typing from the template, or use `{ children: React.ReactNode }`.
-10. `app/page.tsx`: `<h1>Market Charter</h1>`, one sentence, and `<Link href="/chart/AAPL">Open AAPL chart</Link>`.
-11. `app/globals.css`: replace with a minimal system-font stylesheet:
-    - box-sizing reset;
-    - `body { margin:0; font-family: system-ui, sans-serif; }`;
-    - `main { max-width: 1100px; margin: 0 auto; padding: 16px; }`;
-    - `.notice { padding: 8px 12px; border-radius: 6px; background:#fff7e0; border:1px solid #e6c200; }`;
-    - `.error { … background:#fdecec; border:1px solid #e57373; }`;
-    - `footer { … font-size: 13px; color:#555; }`.
-12. `README.md`: replace with a project summary, scripts (`dev`, `build`, `lint`, `test`) and "Environment" (copy `.env.example` to `.env.local`). Leave a `## Database setup` heading with "See P1-T2" (T2 fills it).
-13. Keep `AGENTS.md` as generated. `next dev` re-adds it anyway.
-14. Create `PROGRESS.md` with a Phase 1 header and a T1 entry.
+   Rules, in order:
+   1. `pathname` starts with `/api/` → `next`.
+   2. `pathname === "/login"` → `hasUser ? redirect "/" : next`.
+   3. `!hasUser` → redirect `"/login"` when `pathname === "/"` and `search === ""`; otherwise redirect `` `/login?next=${encodeURIComponent(pathname + search)}` ``.
+   4. Else `next`.
+
+   Tests cover each rule, including `/chart/AAPL` → `/login?next=%2Fchart%2FAAPL` and `/api/candles/AAPL` without a user → `next`.
+9. **`lib/supabase/proxy.ts`**: `export async function updateSession(request: NextRequest): Promise<NextResponse>`. It must not import any `server-only` module.
+   1. Get the config with `getSupabasePublicConfig()`. On `ConfigError`, log `console.error("Missing env:", err.missing)` and return a 500:
+      - for `/api/*`: `NextResponse.json({ error: { code: "config", message: "Server configuration is incomplete." } }, { status: 500 })`;
+      - otherwise: `new NextResponse("Server configuration is incomplete.", { status: 500 })`.
+   2. Copy Supabase's pattern exactly:
+      - `let response = NextResponse.next({ request })`;
+      - `createServerClient(url, key, { cookies: { getAll: () => request.cookies.getAll(), setAll(cookiesToSet, headers) { … } } })`, where `setAll`:
+        - sets each cookie on `request.cookies`;
+        - sets `response = NextResponse.next({ request })`;
+        - sets each cookie with its options on `response.cookies`;
+        - sets each `headers` entry on `response.headers`;
+      - **then immediately** `const { data } = await supabase.auth.getClaims()`, with no code between them.
+   3. Call `decideAccess({ pathname, search: request.nextUrl.search, hasUser: Boolean(data?.claims?.sub) })`.
+   4. On `redirect`:
+      - `const redirect = NextResponse.redirect(new URL(location, request.url))`;
+      - copy every cookie: `for (const c of response.cookies.getAll()) redirect.cookies.set(c)`;
+      - copy `Cache-Control`, `Expires` and `Pragma` if present;
+      - return `redirect`.
+   5. Otherwise return `response`.
+
+   Tests mock `@supabase/ssr`'s `createServerClient`. The fake captures the cookie methods and returns `{ auth: { getClaims } }`. Use `new NextRequest("http://localhost/…")`. Cases:
+   - logged out, `/chart/AAPL` → 307 with `location` ending `/login?next=%2Fchart%2FAAPL`;
+   - logged out, `/api/watchlist` → passes through (not a redirect);
+   - logged in, `/login` → redirect to `/`;
+   - when the fake calls `setAll([{name:"sb-x-auth-token", value:"v", options:{path:"/"}}], {"Cache-Control":"private, no-store"})`, the returned response has that `Set-Cookie` and `Cache-Control`, **including on a redirect response**;
+   - missing env → 500, with no env var value in the body.
+10. **`proxy.ts`** (root):
+    ```ts
+    import { type NextRequest } from "next/server";
+    import { updateSession } from "@/lib/supabase/proxy";
+    export async function proxy(request: NextRequest) { return updateSession(request); }
+    export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"] };
+    ```
+11. **`README.md`**: add an "Auth" section:
+    - email + password, sign-ups disabled;
+    - create the user in Dashboard → Authentication → Users → Add user (Auto Confirm);
+    - required env vars.
 
 **Done when:**
-- `npm run build`, `npm run lint` and `npm test` all pass. `npm test` runs `test/env-example.test.ts`.
-- `next.config.ts` has no `cacheComponents`. `grep -r "next/font/google" app` returns nothing.
-- `git check-ignore -q .env.example` exits 1 (not ignored). `git check-ignore -q .env.local` exits 0.
-- `package.json` has the exact versions listed above and no `technicalindicators` or `@supabase/ssr`.
+- `npm run build`, `npm run lint` and `npm test` pass; `npx tsc --noEmit` is clean. If the build output has a Proxy/Middleware line, record it. Either way, the dev curl check below proves the proxy runs.
+- All new tests pass, and every Phase 1 test passes unchanged.
+- `grep -rn "server-only" lib/supabase/proxy.ts lib/supabase/public-config.ts lib/config-error.ts lib/auth/route-access.ts lib/auth/next-path.ts` → no output.
+- With O1 done, `npm run dev`:
+  - `curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" localhost:3000/chart/AAPL` → `307 …/login?next=%2Fchart%2FAAPL`;
+  - `curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/_next/static/x.js` → not 307.
+  - (`/login` will 404 until T2, which is fine.)
 
 **Risks:**
-- Running `create-next-app` in the repo root fails (BUILD_LOOP.md conflict), so always use the temp-dir route.
-- Without the `.gitignore` exception, `.env.example` would silently never be committed.
-- Don't edit BUILD_LOOP.md.
+- Code placed between `createServerClient` and `getClaims()` causes random logouts (Supabase warning). Keep the pattern verbatim.
+- If Turbopack rejects `server-only` in the proxy graph, that is exactly why the proxy-side modules avoid it. Don't "fix" it by adding `server-only` there.
+- Secrets: the proxy only ever sees the publishable key.
 
-### P1-T2 – Supabase schema migration, DB types, env and admin client
+### P2-T2 – Login, logout, protected app shell, auth on the candles route
 **Files:**
-- Create: `supabase/migrations/20261125000000_initial_schema.sql`, `lib/supabase/database.types.ts`, `lib/env.ts`, `lib/env.test.ts`, `lib/supabase/admin.ts`
-- Change: `README.md`
+- Create:
+  - `app/login/page.tsx`, `app/login/login-form.tsx`, `app/login/actions.ts`
+  - `lib/auth/sign-in-error.ts` (+ `.test.ts`)
+  - `app/(app)/layout.tsx`, `app/(app)/actions.ts`
+  - `lib/http/json.ts` (+ `.test.ts`)
+  - `lib/http/fetch-with-auth-retry.ts` (+ `.test.ts`)
+- Move (`git mv`): `app/page.tsx` → `app/(app)/page.tsx`; `app/chart/[symbol]/page.tsx` → `app/(app)/chart/[symbol]/page.tsx`
+- Change:
+  - `app/api/candles/[symbol]/route.ts` (+ `route.test.ts`)
+  - `lib/candles/api-types.ts`
+  - `lib/symbol.ts` (+ test)
+  - `components/chart-view.tsx`
+  - `app/globals.css`
 
 **Steps:**
-1. Migration (exact SQL; validated on PG16):
-   ```sql
-   -- Phase 1 schema. All four tables from the brief, created now to avoid post-Phase-1 schema changes.
-   create table public.candles (
-     symbol     text        not null,
-     "interval" text        not null,
-     ts         timestamptz not null,
-     open       numeric     not null,
-     high       numeric     not null,
-     low        numeric     not null,
-     close      numeric     not null,
-     volume     bigint,
-     primary key (symbol, "interval", ts),
-     constraint candles_symbol_upper check (symbol = upper(symbol)),
-     constraint candles_interval_valid check ("interval" in ('1h', '1day', '1week', '1month'))
-   );
-
-   create table public.fetch_log (
-     id               bigint      generated always as identity primary key,
-     symbol           text        not null,
-     "interval"       text        not null,
-     credits_used     integer     not null default 0 check (credits_used >= 0),
-     status           text        not null check (status in ('pending', 'ok', 'rate_limited', 'not_found', 'error', 'expired')),
-     candles_received integer,
-     message          text,
-     created_at       timestamptz not null default now(),
-     completed_at     timestamptz
-   );
-   create index fetch_log_series_created_idx on public.fetch_log (symbol, "interval", created_at desc);
-   create index fetch_log_created_idx on public.fetch_log (created_at desc);
-   -- Lease: at most one in-flight Twelve Data call per series.
-   create unique index fetch_log_one_pending_per_series on public.fetch_log (symbol, "interval") where status = 'pending';
-
-   create table public.watchlist (
-     id         uuid        primary key default gen_random_uuid(),
-     user_id    uuid        not null default auth.uid() references auth.users (id) on delete cascade,
-     symbol     text        not null check (symbol = upper(symbol)),
-     sort_order integer     not null default 0,
-     created_at timestamptz not null default now(),
-     unique (user_id, symbol)
-   );
-
-   create table public.indicator_prefs (
-     id         uuid        primary key default gen_random_uuid(),
-     user_id    uuid        not null default auth.uid() references auth.users (id) on delete cascade,
-     symbol     text        check (symbol is null or symbol = upper(symbol)), -- null = default config
-     config     jsonb       not null default '{}'::jsonb,
-     updated_at timestamptz not null default now(),
-     constraint indicator_prefs_user_symbol_key unique nulls not distinct (user_id, symbol)
-   );
-
-   alter table public.candles         enable row level security;
-   alter table public.fetch_log       enable row level security;
-   alter table public.watchlist       enable row level security;
-   alter table public.indicator_prefs enable row level security;
-
-   -- Supabase no longer auto-exposes new tables to the Data API: grant explicitly.
-   revoke all on public.candles, public.fetch_log, public.watchlist, public.indicator_prefs from anon, authenticated;
-   grant select, insert, update, delete on public.candles, public.fetch_log to service_role;
-   grant select, insert, update, delete on public.watchlist, public.indicator_prefs to authenticated, service_role;
-
-   create policy "watchlist_owner_all" on public.watchlist for all to authenticated
-     using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
-   create policy "indicator_prefs_owner_all" on public.indicator_prefs for all to authenticated
-     using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+1. **`lib/candles/api-types.ts`**: extend `ErrorCode` with `"unauthorized" | "invalid_body" | "duplicate" | "watchlist_full" | "not_us" | "not_in_watchlist" | "order_mismatch"`. That gives one shared `ErrorResponse` shape for every route.
+2. **`lib/symbol.ts`**: add `invalidSymbolMessage(raw: string): string`, which returns the exact text currently inline in the candles route:
+   ```ts
+   `"${raw.slice(0, 20)}" isn't a valid ticker. Use 1–10 letters, digits, '.' or '-', e.g. AAPL.`
    ```
-2. `lib/supabase/database.types.ts`: hand-write in `supabase gen types typescript` format. Export `Json` and `Database`, where `public.Tables` has `candles`, `fetch_log`, `watchlist` and `indicator_prefs`, each with `Row`, `Insert`, `Update` and `Relationships: []`. `Views`, `Functions`, `Enums` and `CompositeTypes` are `{ [_ in never]: never }`. Type mapping:
-   - `numeric`/`integer`/`bigint` → `number`
-   - `timestamptz`/`uuid`/`text` → `string`
-   - `jsonb` → `Json`
-   - nullable columns → `| null`
-   - identity `id` → `id?: never` in Insert/Update
-   - defaulted columns are optional in Insert
+   Add a test.
+3. **`lib/http/json.ts`**:
+   - `jsonNoStore(body: unknown, status = 200): Response`;
+   - `errorJson(status: number, code: ErrorCode, message: string, retryAfterSeconds: number | null = null): Response`. It sets `Cache-Control: no-store`, and `Retry-After` when the value isn't null.
 
-   This shape was verified to type-check with supabase-js 2.119.2. Add a header comment: "Hand-written to match supabase/migrations; regenerate with `supabase gen types` once the project is linked."
-3. `lib/env.ts`:
-   - Starts with `import "server-only"`.
-   - Exports `class ConfigError extends Error { readonly missing: string[] }`.
-   - `getTwelveDataApiKey(): string` reads `TWELVE_DATA_API_KEY`.
-   - `getSupabaseAdminConfig(): { url: string; secretKey: string }` reads `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SECRET_KEY`.
-   - Both trim the value, treat empty as missing, and throw `ConfigError` listing the missing **names** only (never values).
-4. `lib/supabase/admin.ts`:
-   - Starts with `import "server-only"`.
-   - `createSupabaseAdminClient(): SupabaseClient<Database>` returns `createClient<Database>(url, secretKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })`.
-   - Optional parameter `options?: { fetch?: typeof fetch }`, passed as `global: { fetch }` (used by store tests).
-   - No module-level client and no env reads at import time.
-5. `lib/env.test.ts`: use `vi.stubEnv` to test:
-   - missing → `ConfigError` with exact `missing` names;
-   - whitespace-only counts as missing;
-   - present → values returned;
-   - the error message doesn't contain any stubbed value.
-6. `README.md` "Database setup":
-   - (a) create a Supabase project;
-   - (b) paste `supabase/migrations/20261125000000_initial_schema.sql` into the SQL Editor and run it, or run `supabase db push` if the CLI is linked;
-   - (c) copy the Project URL and a **secret** key into `.env.local`.
-7. **Local validation (not committed):** run the migration against throwaway local PostgreSQL 16. The binaries are at `/usr/lib/postgresql/16/bin`; the OS user is `postgres`.
-   ```bash
-   PGT=$(mktemp -d /tmp/mc-pg.XXXX) && chown postgres "$PGT"
-   su postgres -c "/usr/lib/postgresql/16/bin/initdb -D $PGT/data -A trust >/dev/null && /usr/lib/postgresql/16/bin/pg_ctl -D $PGT/data -o '-p 54329 -k $PGT' -l $PGT/log start"
-   P="psql -h $PGT -p 54329 -U postgres -d postgres -v ON_ERROR_STOP=1 -q"
-   $P <<'SQL'
-   create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
-   create schema auth; create table auth.users (id uuid primary key);
-   create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-   grant usage on schema auth to anon, authenticated, service_role; grant execute on function auth.uid() to anon, authenticated, service_role;
-   grant usage on schema public to anon, authenticated, service_role;
-   SQL
-   $P -f supabase/migrations/20261125000000_initial_schema.sql && echo MIGRATION_OK
+   Tests cover headers and body.
+4. **Candles route**: replace its local `errorResponse` with `errorJson`, and the success response with `jsonNoStore`. Use `invalidSymbolMessage`. Then add auth **as the first thing inside the existing outer `try`**, before symbol validation:
+   - `const { user } = await getAuthContext()`.
+   - A `ConfigError` → 500 `config`. Use the existing message and log only the missing names.
+   - `!user` → `errorJson(401, "unauthorized", "Log in to load charts.")`.
+
+   Then continue exactly as before. Update `route.test.ts`:
+   - mock `@/lib/auth/session` (`getAuthContext` resolves `{ supabase: {}, user: { id: "u1", email: null } }` by default);
+   - new cases: no user → 401, `no-store`, service not called; `getAuthContext` throws `ConfigError` → 500 `config`, with no variable name in the body.
+
+   All 8 existing cases must still pass.
+5. **`lib/http/fetch-with-auth-retry.ts`** (used by browser code; no server imports):
+   ```ts
+   export const AUTH_RETRY_DELAY_MS = 1000;
+   export async function fetchWithAuthRetry(input: string, init?: RequestInit, deps: { fetch: typeof fetch; sleep: (ms: number) => Promise<void> } = defaultDeps): Promise<Response>
    ```
-   Then run these checks. Each one must show the expected result:
-   - As `set role service_role`: insert one pending fetch_log row for AAPL/1day → succeeds. Insert a second → `duplicate key … fetch_log_one_pending_per_series`.
-   - As `set role anon`: `select * from candles` → `permission denied`.
-   - `select relname, relrowsecurity from pg_class where relname in ('candles','fetch_log','watchlist','indicator_prefs')` → 4 rows, all `t`.
-   - Insert two `auth.users` rows. As `authenticated` with `request.jwt.claim.sub` = user 2, insert a watchlist row with `user_id` = user 1 → `new row violates row-level security policy`.
+   It fetches. On status 401 it sleeps `AUTH_RETRY_DELAY_MS` and fetches once more, then returns that response. Network errors propagate.
 
-   Stop the server with `su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D $PGT/data stop"`, then `rm -rf "$PGT"`. Paste the outputs into PROGRESS.md.
+   Tests: 200 → 1 call; 401 then 200 → 2 calls, slept 1000; 401 then 401 → returns 401 after 2 calls.
+6. **`components/chart-view.tsx`**:
+   - Use `fetchWithAuthRetry` instead of `fetch`.
+   - On a final 401, return a new state `{ kind: "login"; symbol }`, which renders `<div className="error" role="alert">Your session has expired. <a href={`/login?next=${encodeURIComponent(`/chart/${symbol}`)}`}>Log in again</a>.</div>`.
+
+   Nothing else changes in this task (the event dispatch comes in T8).
+7. **`lib/auth/sign-in-error.ts`**: `signInErrorMessage(status: number | undefined): string`:
+   - `429` → `"Too many login attempts. Wait a few minutes and try again."`
+   - `undefined`, or `>= 500` → `"Couldn't reach the login service. Try again shortly."`
+   - anything else → `"Email or password is incorrect."`
+
+   Add tests.
+8. **`app/login/actions.ts`** (`"use server"`):
+   ```ts
+   export interface SignInState { error: string | null; email: string }
+   export async function signIn(_prev: SignInState, formData: FormData): Promise<SignInState>
+   ```
+   1. `email = String(formData.get("email") ?? "").trim()`; `password = String(formData.get("password") ?? "")`; `next = safeNextPath(formData.get("next"))`.
+   2. Either empty → `{ error: "Enter your email and password.", email }`.
+   3. `createSupabaseServerClient()`. A `ConfigError` → `{ error: "Server configuration is incomplete.", email }`.
+   4. `const { error } = await supabase.auth.signInWithPassword({ email, password })`. On `error` → `{ error: signInErrorMessage(error.status), email }`. Never log the email or password.
+   5. `redirect(next)`, **outside any try/catch**.
+9. **`app/login/login-form.tsx`** (`"use client"`):
+   - `const [state, formAction, pending] = useActionState(signIn, { error: null, email: "" })`.
+   - Form fields:
+     - hidden `next`;
+     - `email` (`type="email"`, `autoComplete="username"`, `required`, `defaultValue={state.email}`);
+     - `password` (`type="password"`, `autoComplete="current-password"`, `required`);
+     - submit button "Log in", which reads "Logging in…" and is disabled while `pending`.
+   - `state.error` renders in `<div className="error" role="alert">`.
+   - Labels are visible `<label>`s.
+10. **`app/login/page.tsx`**:
+    - `export const metadata = { title: "Log in – Market Charter" }`.
+    - `async function Page({ searchParams }: { searchParams: Promise<{ next?: string | string[] }> })` reads `next` (first value if an array), runs it through `safeNextPath`, and renders:
+      - `<h1>Log in</h1>`;
+      - `<p>Single-user app. Accounts are created by the owner.</p>`;
+      - `<LoginForm next={next} />`.
+    - No sign-up link.
+11. **`app/(app)/actions.ts`** (`"use server"`): `export async function signOut(): Promise<void>` → `const supabase = await createSupabaseServerClient(); await supabase.auth.signOut(); redirect("/login");`.
+12. **`app/(app)/layout.tsx`** (async Server Component):
+    - `const { user } = await getAuthContext(); if (!user) redirect("/login");`
+    - Render:
+      ```tsx
+      <div className="app-shell">
+        <header className="app-header"><Link href="/">Market Charter</Link><span className="muted">{user.email}</span><form action={signOut}><button type="submit">Log out</button></form></header>
+        <aside className="sidebar" aria-label="Watchlist"><h2>Watchlist</h2><p className="muted">Coming in P2-T8.</p></aside>
+        <section className="content">{children}</section>
+      </div>
+      ```
+13. **`app/(app)/page.tsx`**: keep the `<h1>`. Text: "Pick a ticker from your watchlist, or open the AAPL chart.", with the existing link.
+14. **`app/globals.css`**:
+    - **delete the first, duplicated `footer { … }` block** (keep the second);
+    - `main { max-width: 1400px; }`;
+    - add:
+      - `.app-shell { display: grid; grid-template-columns: 260px 1fr; grid-template-areas: "header header" "sidebar content"; gap: 16px; }`
+      - `.app-header { grid-area: header; display: flex; align-items: center; gap: 12px; } .app-header form { margin-left: auto; }`
+      - `.sidebar { grid-area: sidebar; } .content { grid-area: content; min-width: 0; }`
+      - `.muted { color: #666; font-size: 0.85rem; }`
+      - `@media (max-width: 800px) { .app-shell { grid-template-columns: 1fr; grid-template-areas: "header" "sidebar" "content"; } }`
+      - `.login-form { display: grid; gap: 8px; max-width: 320px; } .login-form input { padding: 6px 8px; }`
+
+**Done when:**
+- `npm run build` passes, with the routes `/`, `/chart/[symbol]`, `/login`, `/api/candles/[symbol]` and the proxy; lint and test pass; `tsc` is clean.
+- The candles route's 8 old tests and 2 new ones pass. The `json`, `fetch-with-auth-retry` and `sign-in-error` tests pass.
+- `git status` shows the two page files as renames.
+- Dev server with `.env.local` (after O1):
+  - logged out: `curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/api/candles/AAPL` → `401`;
+  - `/login` → 200, and its HTML contains `Log in` and `autocomplete="current-password"`;
+  - `/` → 307 to `/login`.
+  - (A real login is proven in T9, after O2.)
+- `grep -rn "signUp" app lib components` → no output.
+
+**Risks:**
+- `redirect()` inside `try` would be swallowed.
+- The `(app)` layout runs `cookies()`, which makes every route dynamic. That's expected.
+- Never log credentials.
+- The Twelve Data budget: none used.
+
+### P2-T3 – Provider: `searchSymbols` + US-listing rule
+**Files:**
+- Change:
+  - `lib/data-provider/types.ts`
+  - `lib/data-provider/twelve-data.ts` (+ `twelve-data.test.ts`)
+  - `test/helpers/fake-provider.ts`
+- Create:
+  - `test/fixtures/twelve-data-symbol-search.json`
+  - `lib/symbols/us-listing.ts` (+ `.test.ts`)
+
+**Steps:**
+1. **`types.ts`**: add
+   ```ts
+   export interface SymbolMatch { symbol: string; name: string | null; exchange: string | null; micCode: string | null; country: string | null; instrumentType: string | null; currency: string | null }
+   ```
+   and add to `DataProvider`:
+   ```ts
+   /** Ticker search (1 credit). Exact provider order (relevance). */
+   searchSymbols(query: string): Promise<SymbolMatch[]>;
+   ```
+2. **`twelve-data.ts`** refactor, with the same behaviour for `getCandles`:
+   - Extract `private async requestJson(path: string, params: URLSearchParams): Promise<RawResponse | null>`. It contains the current fetch (header, `cache: "no-store"`, timeout), the JSON parse and the whole error-code mapping.
+   - Where the code now does `return []` for 400 "no data is available", `requestJson` returns `null`.
+   - `getCandles` calls `requestJson("/time_series", params)` and maps `null → []`. All existing T4 tests must pass unchanged.
+   - Add `data?: unknown` to `RawResponse`.
+3. **`searchSymbols(query)`**:
+   - `params = new URLSearchParams({ symbol: query, outputsize: "30" })`; `json = await this.requestJson("/symbol_search", params)`.
+   - `null` → `[]`.
+   - `!Array.isArray(json.data)` → `ProviderError("bad_response", "Data provider returned an unexpected response")`.
+   - Map each item. If `symbol` is not a non-empty string, skip the item. Other fields are strings or `null`: `instrument_name→name`, `exchange`, `mic_code→micCode`, `country`, `instrument_type→instrumentType`, `currency`.
+   - Keep the provider's order.
+4. **Fixture `test/fixtures/twelve-data-symbol-search.json`** (synthetic; label it in a `_comment` key):
+   - `{ "data": [ … ], "status": "ok" }` with:
+     - AAPL / NASDAQ / XNGS / United States / Common Stock / USD;
+     - AAPL / BMV / XMEX / Mexico / Common Stock / MXN;
+     - APLE / NYSE / XNYS / United States / REIT / USD;
+     - one item with no `symbol` (must be skipped).
+5. **Tests (`twelve-data.test.ts`, new `describe("searchSymbols")`)**:
+   - maps the fixture: 3 results, in order, with all fields;
+   - the URL is exactly `/symbol_search` with the params `{symbol:"AAPL", outputsize:"30"}`, and the host is `api.twelvedata.com`;
+   - the key is sent only in the `Authorization` header;
+   - an HTTP 200 body `{status:"error", code:429}` → `rate_limited`;
+   - `{status:"ok"}` without `data` → `bad_response`;
+   - `{data: []}` → `[]`;
+   - a 500 → `unavailable`;
+   - error messages never contain the key or URL.
+6. **`test/helpers/fake-provider.ts`**:
+   - add `readonly searchCalls: string[] = []`, a separate `searchQueue` and `enqueueSearch(result: SymbolMatch[] | Error): this`;
+   - `searchSymbols` records the call and returns or throws the next result (throws "FakeProvider: no queued search result" when empty);
+   - optional `delayMs` applies as for `getCandles`.
+7. **`lib/symbols/us-listing.ts`** (pure):
+   ```ts
+   export const US_MIC_CODES: ReadonlySet<string> = new Set(["XNAS","XNGS","XNMS","XNCM","XNYS","ARCX","BATS","XASE","IEXG"]);
+   export const US_COUNTRY = "United States";
+   export type UsListingResult = { kind: "us"; match: SymbolMatch } | { kind: "non_us"; exchanges: string[] } | { kind: "none" };
+   export function pickUsListing(symbol: string, matches: SymbolMatch[]): UsListingResult
+   export function summariseMatches(matches: SymbolMatch[], max = 5): string // "AAPL@NASDAQ(United States), AAPL@BMV(Mexico)" or "no matches"
+   ```
+   Algorithm: see Design decision 3. `exchanges` = unique `exchange ?? micCode ?? "unknown"`, first 3.
+
+   Tests:
+   - the fixture with "AAPL" → us / NASDAQ;
+   - "aapl" input already normalised by caller (pass "AAPL");
+   - only the Mexico item → `non_us` `["BMV"]`;
+   - `[]` → none;
+   - "APL" vs "APLE" → none (exact match only);
+   - country null but mic XNYS → us;
+   - two US hits, ETF then Common Stock → picks the Common Stock;
+   - `summariseMatches` format and its 5-item cap.
+
+**Done when:**
+- build, lint and test pass; `tsc` is clean;
+- every existing `twelve-data.test.ts` case passes untouched, plus the new ones;
+- `grep -rn "symbol_search" app components` → no output (provider only).
+
+**Risks:**
+- The field names are partly unverified. The parser needs only `symbol`, and T4 logs a match summary on `not_found`, so T9 can diagnose with no extra credit.
+- No network in tests.
+
+### P2-T4 – Shared credit budget + logged, guarded US symbol check
+**Files:**
+- Create:
+  - `lib/candles/messages.ts`
+  - `lib/candles/credit-budget.ts` (+ `.test.ts`)
+  - `lib/cache/complete-lease.ts`
+  - `lib/symbols/check-us-symbol.ts` (+ `.test.ts`)
+- Change:
+  - `lib/candles/limits.ts`
+  - `lib/cache/candle-store.ts`
+  - `lib/candles/get-chart-candles.ts`
+  - `test/helpers/memory-candle-store.ts`
+
+**Steps:**
+1. **`limits.ts`**: add `export const MAX_LOG_MESSAGE_LENGTH = 500;` and remove the local constant from `get-chart-candles.ts`.
+2. **`messages.ts`**: move `minuteLimit`, `dayLimit`, `providerLimit` and `cacheUnavailable` (exact text) out of `get-chart-candles.ts` as `export const LIMIT_MESSAGES = { minute, day, provider } as const` and `export const CACHE_UNAVAILABLE_MESSAGE`. `get-chart-candles.ts` imports them, and all other messages stay where they are.
+3. **`credit-budget.ts`**:
+   ```ts
+   export interface BudgetRefusal { kind: "minute" | "day"; message: string; retryAfterSeconds: number }
+   export async function checkCreditBudget(store: Pick<CandleStore, "sumCreditsSince">, now: Date): Promise<BudgetRefusal | null>
+   ```
+   - It holds exactly today's logic: minute sum ≥ `CREDITS_PER_MINUTE` → `{minute, 60}`; day sum since UTC midnight ≥ `CREDITS_PER_DAY` → `{day, secondsUntilNextUtcMidnight}`.
+   - Move `startOfUtcDay` and `secondsUntilNextUtcMidnight` here (exported).
+   - Tests: 7 credits → null; 8 within 60 s → minute; 800 since midnight, spread wider → day, with the correct seconds at 17:00Z.
+4. **`complete-lease.ts`**: move `completeLeaseBestEffort` from `get-chart-candles.ts` (same body) and export it.
+5. **`get-chart-candles.ts`**: use `checkCreditBudget` (`refusal` → `limited(refusal.message, refusal.retryAfterSeconds)`), `completeLeaseBestEffort`, `LIMIT_MESSAGES` and `CACHE_UNAVAILABLE_MESSAGE`. **No behaviour change:** all 27 existing tests must pass untouched.
+6. **`candle-store.ts`**:
+   - `export type LogInterval = Interval | "symbol_search";`
+   - change `acquireFetchLease(symbol: string, interval: LogInterval, now: Date)`.
+   - No other signature changes. The Supabase implementation compiles as is, since `fetch_log.interval` is `string`.
+   - `MemoryLogRow.interval` becomes `LogInterval`.
+7. **`check-us-symbol.ts`** (`import "server-only"`):
+   ```ts
+   export type SymbolCheckResult =
+     | { ok: true; match: SymbolMatch }
+     | { ok: false; status: 404 | 422 | 429 | 502 | 503; error: { code: ErrorCode; message: string }; retryAfterSeconds: number | null };
+   export async function checkUsSymbol(symbol: string, deps: { store: CandleStore; provider: DataProvider; now?: () => Date }): Promise<SymbolCheckResult>
+   ```
+   The symbol is already normalised. The whole body is wrapped so that a `StoreError` → 503 `cache_unavailable` (`CACHE_UNAVAILABLE_MESSAGE`, logged with `console.error`). Steps:
+   1. `refusal = await checkCreditBudget(store, now)` → 429 `rate_limited` with the refusal's message and seconds. No log row, 0 provider calls.
+   2. `leaseId = await store.acquireFetchLease(symbol, "symbol_search", now)`; `null` → 503 `busy`, ``${symbol} is already being checked. Try again in a moment.``, retry `BUSY_RETRY_SECONDS`.
+   3. `matches = await provider.searchSymbols(symbol)`. On `ProviderError`, complete the lease with `creditsUsed: CREDITS_PER_CALL`, `candlesReceived: null` and the message cut to 500:
+      - `rate_limited` → status `rate_limited` → 429 `LIMIT_MESSAGES.provider`, retry 60.
+      - `not_found` → treat as `matches = []` and continue (don't close the lease yet).
+      - `unavailable` → `error` → 502 `provider_unavailable`, `"Couldn't reach Twelve Data to check the ticker. Try again shortly."`
+      - `forbidden` / `auth` / `bad_response` → `error` + `console.error` → 502 `provider_error`, `"Twelve Data returned an unexpected error while checking the ticker. Check the server logs."`
+      - A non-`ProviderError` → close as `error` ("Unexpected data provider failure") and rethrow.
+   4. `pick = pickUsListing(symbol, matches)`:
+      - `us` → complete `ok` (message null) → `{ ok: true, match }`.
+      - `non_us` → complete `not_found`, message `"non-US only: " + summariseMatches(matches)` → 422 `not_us`, ``${symbol} isn't listed on a US exchange (found on ${exchanges.join(", ")}). Only US tickers are supported.``
+      - `none` → complete `not_found`, message `summariseMatches(matches)` → 404 `not_found`, ``No US-listed ticker "${symbol}" was found at Twelve Data.``
+8. **Tests (`check-us-symbol.test.ts`;** MemoryCandleStore + FakeProvider + fixed clock). Each asserts `provider.searchCalls.length` and `store.logRows()`:
+   1. US hit → ok, 1 call, 1 row `{interval:"symbol_search", status:"ok", creditsUsed:1}`.
+   2. None → 404 `not_found`, row `not_found` whose message contains "no matches" or the summary.
+   3. Non-US → 422 `not_us`, message names BMV, row `not_found`.
+   4. Provider `not_found` error → 404 (treated as no matches), 1 row `not_found`.
+   5. Minute budget full (seeded 8 credits) → 429, 0 calls, no new row.
+   6. Provider 429 → 429, row `rate_limited`, credits 1.
+   7. Lease held (pending `symbol_search` row 10 s old) → 503 busy, 0 calls.
+   8. A pending **`1day`** lease for the same symbol does **not** block the search (independent series).
+   9. Unavailable → 502 `provider_unavailable`; bad_response → 502 `provider_error`.
+   10. `failNext("sumCreditsSince")` → 503 `cache_unavailable`, 0 calls.
+   11. A search row `ok` does not make `getLastOkFetchAt(symbol, "1day")` non-null.
+
+**Done when:**
+- all new tests pass, and **all 27 `get-chart-candles` tests and the store contract pass unchanged**;
+- build, lint and test pass; `tsc` is clean;
+- `grep -n "sumCreditsSince" lib/candles/get-chart-candles.ts` → no output (it goes through `checkCreditBudget`);
+- `grep -rn "Twelve Data's free-plan limit" lib` → exactly 1 hit (`messages.ts`).
+
+**Risks:**
+- This is a refactor of approved Phase 1 code. The unchanged tests are the safety net, so don't edit them.
+- The budget race across instances is unchanged (accepted in Phase 1).
+- Search credits are logged as 1, which is conservative.
+
+### P2-T5 – Recent candles read, quote maths, display formatters
+**Files:**
+- Change:
+  - `lib/cache/candle-store.ts`
+  - `lib/cache/supabase-candle-store.ts` (+ `.test.ts`)
+  - `test/helpers/memory-candle-store.ts`
+  - `test/helpers/candle-store-contract.ts`
+- Create:
+  - `lib/watchlist/api-types.ts`
+  - `lib/watchlist/quote.ts` (+ `.test.ts`)
+  - `lib/watchlist/format.ts` (+ `.test.ts`)
+
+**Steps:**
+1. **`CandleStore`**: add `/** Last `count` candles, ascending by ts. */ getRecentCandles(symbol: string, interval: Interval, count: number): Promise<Candle[]>;`.
+   - **Supabase:** select `ts,open,high,low,close,volume`, `.eq` symbol and interval, `.order("ts", { ascending: false }).limit(count)`, map as in `getCandles`, then reverse. An error → `StoreError("Supabase getRecentCandles failed: …")`.
+   - **Memory:** the last `count` of the sorted series; also uses `enter("getRecentCandles")`.
+   - **Unit test** (fake fetch): the URL has `order=ts.desc` and `limit=2`; the result comes back ascending; an error → `StoreError`.
+   - **Contract case:** seed 3 candles; `getRecentCandles(…, 2)` → the last two, ascending; an unknown series → `[]`.
+2. **`lib/watchlist/api-types.ts`** (types only):
+   ```ts
+   /** asOf = UTC seconds of the last cached daily bar. changePct in percent (1.5 = +1.5%). */
+   export interface WatchlistQuote { lastClose: number; prevClose: number | null; changePct: number | null; asOf: number; stale: boolean }
+   export interface WatchlistItem { symbol: string; quote: WatchlistQuote | null }
+   export interface WatchlistResponse { items: WatchlistItem[] }
+   export interface WatchlistItemResponse { item: WatchlistItem }
+   export interface WatchlistRefreshResponse { item: WatchlistItem; source: "cache" | "api"; notice: Notice | null }
+   ```
+3. **`quote.ts`**: `toQuote(recent: Candle[], lastOkFetchAt: Date | null, now: Date): WatchlistQuote | null`:
+   - `[]` → `null`;
+   - `last = recent.at(-1)`, `prev = recent.length > 1 ? recent.at(-2) : null`;
+   - `changePct = prev && prev.close !== 0 ? ((last.close - prev.close) / prev.close) * 100 : null`;
+   - `asOf = Date.parse(last.ts) / 1000`;
+   - `stale = !isDailyCacheFresh({ latestCachedTs: last.ts, lastOkFetchAt, now })`.
+
+   Tests:
+   - 100 → 102 → +2;
+   - 50 → 49 → −2;
+   - a single candle → `prevClose` and `changePct` null;
+   - a previous close of 0 → `changePct` null;
+   - the stale flag on both sides of the 18:00 ET cutoff, using Phase 1's NZ example dates;
+   - the holiday clause (an ok fetch after the cutoff) → not stale.
+4. **`format.ts`** (browser-safe):
+   - `formatPrice(v: number): string` → `Intl.NumberFormat("en-NZ", { minimumFractionDigits: 2, maximumFractionDigits: Math.abs(v) < 1 ? 4 : 2 })`.
+   - `formatChangePct(pct: number | null): string` → `null` gives `"—"`; otherwise `Intl.NumberFormat("en-NZ", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: "exceptZero" }).format(pct / 100)`.
+   - `changeClass(pct: number | null): "up" | "down" | "flat"`.
+
+   Tests (normalise whitespace): `212.4` → `"212.40"`; `0.12345` → `"0.1235"`; `1234.5` → `"1,234.50"`; `1.234` → `"+1.23%"`; `-0.456` → `"-0.46%"` (accept U+2212 by normalising); `0` → `"0.00%"`; `null` → `"—"`.
 
 **Done when:**
 - build, lint and test pass;
-- `lib/env.test.ts` passes;
-- the local PG validation output (MIGRATION_OK plus the 4 expected results) is in PROGRESS.md;
-- `grep -rn "process.env" lib app --include=*.ts --include=*.tsx | grep -v "lib/env.ts" | grep -v "\.test\.tsx\?:"` returns nothing. This applies to non-test source only: opt-in integration tests such as T5's may read `process.env`.
+- the contract passes against the memory store; the Supabase integration contract runs in T9;
+- `quote.ts` imports nothing from `server-only` modules.
 
 **Risks:**
-- Missing GRANTs means 42501 errors on real Supabase, so keep the grant block.
-- `interval` is a SQL keyword. It is quoted in the SQL, and PostgREST and supabase-js accept it as a plain column name.
-- The secret key bypasses RLS. It must only ever be imported from `server-only` modules.
+- "Last price" is the last **completed** close, by design (Phase 1 never caches the in-progress bar). The UI labels it with its date.
 
-### P1-T3 – Market calendar, NZ display formatters, symbol validation
-**Files:** `lib/time/market-calendar.ts` (+ `.test.ts`), `lib/time/display.ts` (+ `.test.ts`), `lib/symbol.ts` (+ `.test.ts`)
-
-**Steps:**
-1. `lib/time/market-calendar.ts` (pure, no imports from app code):
-   - `export const MARKET_TIME_ZONE = "America/New_York"`, `DAILY_CLOSE_CUTOFF = { hour: 18, minute: 0 }`.
-   - `zonedParts(instant: Date, timeZone: string): { year; month; day; hour; minute; weekday }` via `Intl.DateTimeFormat("en-US", { timeZone, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hourCycle:"h23", weekday:"short" }).formatToParts`. Numbers are parsed from parts, and `weekday` is 0–6 with Sun = 0.
-   - `zonedDateTimeToUtc(date: string /*YYYY-MM-DD*/, hour: number, minute: number, timeZone: string): Date`:
-     1. `guess = Date.UTC(y, m-1, d, hour, minute)`
-     2. `off1 = offsetMs(guess)`, where `offsetMs(t) = Date.UTC(...zonedParts(new Date(t), tz)) - t`
-     3. `result = guess - off1`
-     4. if `offsetMs(result) !== off1`, use `guess - offsetMs(result)`
-   - `addDays(date: string, n: number): string` (UTC date arithmetic) and `dayOfWeek(date: string): number`.
-   - `expectedLatestDailyCandleDate(now: Date): string`: the rule in "Stale rule" above.
-   - `dailyCutoffInstant(date: string): Date` = `zonedDateTimeToUtc(date, 18, 0, MARKET_TIME_ZONE)`.
-   - `isDailyCacheFresh(args: { latestCachedTs: string | null; lastOkFetchAt: Date | null; now: Date }): boolean`: the rule above. `latestCachedTs` is ISO, compared via its first 10 chars.
-   - `dateToDailyTs(date: string): string` → `${date}T00:00:00.000Z`. `dailyTsToDate(ts: string): string` → `new Date(ts).toISOString().slice(0, 10)`, which accepts `+00:00` forms from Postgres.
-2. `lib/time/market-calendar.test.ts`. Use exact instants, all real 2026 calendar dates:
-   - Wed 2026-11-25T17:00Z (12:00 ET) → `2026-11-24`
-   - Wed 2026-11-25T23:00Z (18:00 ET exactly) → `2026-11-25`
-   - Wed 2026-11-25T22:59Z → `2026-11-24`
-   - Sat 2026-11-28T15:00Z → `2026-11-27`
-   - Sun 2026-11-29T23:30Z → `2026-11-27`
-   - Mon 2026-11-30T14:00Z (09:00 ET) → `2026-11-27`
-   - NZ morning: 2026-11-25T20:00Z (= 09:00 NZDT Thu 26 Nov, 15:00 ET Wed) → `2026-11-24`
-   - `dailyCutoffInstant("2026-10-30")` → `2026-10-30T22:00:00.000Z` (EDT); `("2026-11-02")` → `2026-11-02T23:00:00.000Z` (EST); `("2026-03-06")` → `23:00Z`; `("2026-03-09")` → `22:00Z` (DST starts 8 Mar 2026)
-   - `isDailyCacheFresh`:
-     - null cache → false
-     - latest = expected → true
-     - latest older and `lastOkFetchAt` null → false
-     - Thanksgiving: now 2026-11-27T01:00Z (Thu 26 Nov 20:00 ET), latest `2026-11-25`, `lastOkFetchAt` 2026-11-26T23:30Z → true; with `lastOkFetchAt` 2026-11-26T22:00Z → false
-   - `dailyTsToDate("2026-11-24T00:00:00+00:00")` → `2026-11-24`
-3. `lib/time/display.ts`: `DISPLAY_TIME_ZONE = "Pacific/Auckland"`, `DISPLAY_LOCALE = "en-NZ"`.
-   - `formatNzDate(utcSeconds)`: `{day:"numeric", month:"short", year:"numeric"}` → "24 Nov 2026".
-   - `formatNzDateTime(utcSeconds)`: adds `hour:"2-digit", minute:"2-digit", hourCycle:"h23"` → "25 Nov 2026, 09:00".
-   - `nzTickMarkLabel(utcSeconds, tickMarkType: 0|1|2|3|4)`: Year → "2026", Month → "Nov", DayOfMonth → "24", Time/TimeWithSeconds → "09:00".
-
-   Pure, so no lightweight-charts import here; numeric tick types are mapped in T8.
-4. `lib/time/display.test.ts`:
-   - `formatNzDate(Date.UTC(2026,10,24)/1000)` → `"24 Nov 2026"`
-   - `formatNzDateTime(Date.parse("2026-11-24T20:00:00Z")/1000)` → `"25 Nov 2026, 09:00"`
-   - the tick labels for each type
-
-   If ICU spacing ever differs, compare after `.replace(/\s/g," ")`.
-5. `lib/symbol.ts`: `normaliseSymbol(raw: string): string | null`. Trim, uppercase, accept `/^[A-Z][A-Z0-9.-]{0,9}$/`, otherwise null.
-6. `lib/symbol.test.ts`:
-   - `aapl` → `AAPL`; ` brk.b ` → `BRK.B`; `BF-B` → `BF-B`
-   - `""`, `1ABC`, `AAPL;DROP`, `A/B` and an 11-char symbol → null
-
-**Done when:** all the listed tests pass, and build and lint pass.
-
-**Risks:**
-- DST mistakes, which are covered by the March and November cases.
-- Never hard-code −4/−5 offsets.
-- Don't use `toLocaleString` round-trips via `new Date(string)` parsing; only `formatToParts`.
-
-### P1-T4 – Data provider interface + Twelve Data implementation
+### P2-T6 – Watchlist store (RLS-scoped) + watchlist service
 **Files:**
-- `lib/data-provider/types.ts`
-- `lib/data-provider/twelve-data.ts` (+ `twelve-data.test.ts`)
-- `lib/data-provider/index.ts`
-- `test/fixtures/twelve-data-time-series-1day.json`
+- Create:
+  - `lib/watchlist/limits.ts`
+  - `lib/watchlist/watchlist-store.ts`
+  - `lib/watchlist/supabase-watchlist-store.ts` (+ `.test.ts`)
+  - `test/helpers/memory-watchlist-store.ts`
+  - `lib/watchlist/watchlist-service.ts` (+ `.test.ts`)
 
 **Steps:**
-1. `types.ts` (no `server-only`; types are importable anywhere):
+1. **`limits.ts`**: `MAX_WATCHLIST_ITEMS = 30`, `REFRESH_PACE_MS = 10_000`, `REFRESH_BUSY_RETRY_MS = 3_000`, `MAX_REFRESH_BUSY_RETRIES = 3`.
+2. **`watchlist-store.ts`**:
    ```ts
-   export type Interval = "1day";
-   export const SUPPORTED_INTERVALS: readonly Interval[] = ["1day"];
-   export interface Candle { ts: string; open: number; high: number; low: number; close: number; volume: number | null } // ts = ISO UTC
-   export interface DataProvider {
-     readonly name: string;
-     /** Candles ascending by ts. `from` = 'YYYY-MM-DD', inclusive, exchange-local date. Omitted = full history backfill. */
-     getCandles(symbol: string, interval: Interval, from?: string): Promise<Candle[]>;
-   }
-   export type ProviderErrorKind = "rate_limited" | "not_found" | "forbidden" | "auth" | "unavailable" | "bad_response";
-   export class ProviderError extends Error {
-     constructor(readonly kind: ProviderErrorKind, message: string, readonly httpStatus: number | null = null) { super(message); this.name = "ProviderError"; }
+   export interface WatchlistRow { symbol: string; sortOrder: number }
+   export interface WatchlistStore {
+     /** Current user's rows, ordered by sort_order then created_at. */
+     list(): Promise<WatchlistRow[]>;
+     insert(symbol: string, sortOrder: number): Promise<"ok" | "duplicate">;
+     /** false when no row was deleted. */
+     remove(symbol: string): Promise<boolean>;
+     setSortOrders(updates: WatchlistRow[]): Promise<void>;
    }
    ```
-2. `twelve-data.ts` (`import "server-only"`):
-   - `class TwelveDataProvider implements DataProvider`, `name = "twelve-data"`.
-   - Constructor `{ apiKey: string; fetchImpl?: typeof fetch; baseUrl?: string /* default "https://api.twelvedata.com" */; timeoutMs?: number /* default 10000 */ }`.
-   - Exported constant `INITIAL_OUTPUTSIZE = 5000`.
-   - Request:
-     - `GET ${baseUrl}/time_series?symbol=…&interval=1day` + (`from` ? `&start_date=${from}` : `&outputsize=5000`), built with `URLSearchParams`. **Do not send `order`.** Twelve Data's default `desc` returns the newest bars first, so the initial backfill gets the *latest* 5000 bars, not the oldest; step (d) sorts ascending locally;
-     - header `Authorization: apikey ${apiKey}`; **never** put the key in the URL;
-     - `cache: "no-store"`, `signal: AbortSignal.timeout(timeoutMs)`.
-   - Response mapping:
-     - (a) a fetch rejection or timeout → `unavailable`.
-     - (b) Non-JSON body → `bad_response`, unless HTTP ≥ 500, which is `unavailable`.
-     - (c) Error code = `json.status === "error" ? json.code : res.ok ? null : res.status`.
-       - 429 → `rate_limited`
-       - 401 → `auth`
-       - 403 → `forbidden`
-       - 404 → `not_found`
-       - 400: if message matches `/no data is available/i` → return `[]`; if it matches `/symbol/i` (e.g. "**symbol** not found: XYZ") → `not_found`; else `bad_response`
-       - ≥ 500 → `unavailable`
-       - anything else → `bad_response`
-     - (d) `status === "ok"` and `values` an array: map each value:
-       - `date = datetime.slice(0,10)`, which must match `/^\d{4}-\d{2}-\d{2}$/`;
-       - `ts = dateToDailyTs(date)`;
-       - OHLC via `Number()`, which must be finite;
-       - `volume = values.volume === undefined ? null : Number(volume)`;
-       - any invalid value → `bad_response`;
-       - sort ascending by ts and de-dupe by ts.
-     - (e) `ProviderError` messages contain Twelve Data's message but never the URL or the key.
-3. `index.ts` (`import "server-only"`): `export function getDataProvider(): DataProvider { return new TwelveDataProvider({ apiKey: getTwelveDataApiKey() }); }`. This is the single switch point when the provider changes.
-4. Fixture: 6 synthetic daily values for 2026-11-17 … 2026-11-24 (weekdays), **listed newest first** (Twelve Data's default `desc` order, which also exercises the local sort), with string prices, the 3rd value without `volume`, and a `meta` block (`symbol: "TEST"`, `exchange_timezone: "America/New_York"`).
-5. `twelve-data.test.ts`, with a fake `fetchImpl` that records calls:
-   - success maps the fixture (count, first/last ts, numbers, `volume: null`);
-   - URL has `outputsize=5000` and no `start_date` when `from` is omitted, and `start_date=2026-11-20` and no `outputsize` when given;
-   - **URL assertion: in both cases `new URL(url).searchParams.has("order")` is `false`**, and the parsed params are exactly `{symbol, interval, outputsize}` or `{symbol, interval, start_date}` (no others);
-   - the newest-first fixture comes back sorted ascending (first ts `2026-11-17…`, last `2026-11-24…`);
-   - 400 `"Invalid **interval** provided"` → `bad_response` (not `not_found`);
-   - `Authorization` header is `apikey test-key`, and `"test-key"` is not in the URL;
-   - HTTP 429 → `rate_limited`;
-   - **HTTP 200 with `{status:"error",code:429}` → `rate_limited`**;
-   - 401 → `auth`; 403 → `forbidden`;
-   - 400 "**symbol** not found" → `not_found`;
-   - 400 "No data is available on the specified dates" → `[]`;
-   - 500 → `unavailable`; fetch throws → `unavailable`;
-   - a garbage value (`"open":"abc"`) → `bad_response`.
+   Errors throw `StoreError` (reuse from `lib/cache/candle-store.ts`).
+3. **`supabase-watchlist-store.ts`** (`import "server-only"`): `createSupabaseWatchlistStore(client: SupabaseClient<Database>)` (use T1's alias if one was needed). **The client must be the user-scoped server client**, never the admin client.
+   - `list`: `.from("watchlist").select("symbol,sort_order").order("sort_order").order("created_at")`.
+   - `insert`: `.insert({ symbol, sort_order })` with no `user_id` (the default is `auth.uid()`). Error code `23505` → `"duplicate"`; other errors → `StoreError`.
+   - `remove`: `.delete().eq("symbol", symbol).select("symbol")` → `data.length > 0`.
+   - `setSortOrders`: `Promise.all(updates.map(u => .update({ sort_order: u.sortOrder }).eq("symbol", u.symbol)))`. The first error → `StoreError`.
+
+   Unit tests (fake fetch, like `supabase-candle-store.test.ts`):
+   - the list URL has `order=sort_order.asc,created_at.asc`;
+   - the insert body has no `user_id`;
+   - 23505 → `"duplicate"`;
+   - delete returns true or false by the rows returned;
+   - `setSortOrders` sends one PATCH per update, filtered on `symbol`;
+   - a 500 → `StoreError`.
+4. **`memory-watchlist-store.ts`**: same semantics, with `failNext(method)` and a `rows()` helper.
+5. **`watchlist-service.ts`** (`import "server-only"`):
+   ```ts
+   export interface WatchlistDeps { watchlist: WatchlistStore; candles: CandleStore; provider: DataProvider; now?: () => Date }
+   export type WatchlistFailure = { ok: false; status: 400 | 404 | 409 | 422 | 429 | 502 | 503; error: { code: ErrorCode; message: string }; retryAfterSeconds: number | null };
+   listWatchlist(deps): Promise<{ ok: true; items: WatchlistItem[] } | WatchlistFailure>
+   addToWatchlist(raw: unknown, deps): Promise<{ ok: true; item: WatchlistItem } | WatchlistFailure>
+   removeFromWatchlist(raw: unknown, deps): Promise<{ ok: true } | WatchlistFailure>
+   reorderWatchlist(symbols: unknown, deps): Promise<{ ok: true } | WatchlistFailure>
+   refreshWatchlistSymbol(raw: unknown, deps): Promise<{ ok: true; item: WatchlistItem; source: "cache" | "api"; notice: Notice | null } | WatchlistFailure | ChartCandlesFailure>
+   ```
+   - Private `readQuote(symbol, deps, now)` = `toQuote(await candles.getRecentCandles(symbol, "1day", 2), await candles.getLastOkFetchAt(symbol, "1day"), now)`.
+   - Every function catches `StoreError` → 503 `cache_unavailable` (`CACHE_UNAVAILABLE_MESSAGE`), logged.
+   - **Symbol parsing:** `raw` must be a string of ≤ 20 chars and pass `normaliseSymbol`. Otherwise:
+     - `addToWatchlist` → 400 `invalid_symbol` with `invalidSymbolMessage(String(raw ?? ""))`;
+     - `removeFromWatchlist` → 400 `invalid_symbol` likewise;
+     - `refreshWatchlistSymbol` → 400 `invalid_symbol` likewise.
+   - **list:** `rows = watchlist.list()`; `items = await Promise.all(rows.map(r => ({ symbol, quote: readQuote(...) })))`.
+   - **add**, in order (stop at the first failure):
+     1. Parse the symbol.
+     2. `rows = list()`. Already present → 409 `duplicate`, ``${S} is already in your watchlist.``
+     3. `rows.length >= MAX_WATCHLIST_ITEMS` → 409 `watchlist_full`, ``Your watchlist is full (${MAX} tickers). Remove one first.``
+     4. `check = checkUsSymbol(S, { store: candles, provider, now })`. A failure is returned as is (its status and code are within `WatchlistFailure`).
+     5. `insert(S, rows.length ? Math.max(...sortOrders) + 1 : 0)`. `"duplicate"` → 409 `duplicate` (race).
+     6. `{ ok: true, item: { symbol: S, quote: await readQuote(S) } }`.
+   - **remove:** parse; `remove(S)` false → 404 `not_in_watchlist`, ``${S} isn't in your watchlist.``
+   - **reorder:**
+     1. `symbols` must be an array of ≤ `MAX_WATCHLIST_ITEMS` strings, each passing `normaliseSymbol` to the same value with no duplicates. Otherwise 400 `invalid_body`, `"Request body is not valid."`
+     2. `rows = list()`. If the lengths differ or any symbol is missing → 409 `order_mismatch`, `"Your watchlist changed somewhere else. Reload and try again."`
+     3. `updates` = entries whose index ≠ current `sortOrder`; `setSortOrders(updates)` (skipped when empty).
+   - **refresh:**
+     1. Parse.
+     2. Not in `list()` → 404 `not_in_watchlist` (0 provider calls).
+     3. `r = await getChartCandles(S, "1day", { store: candles, provider, now })`.
+     4. `!r.ok` → return `r` (a `ChartCandlesFailure`).
+     5. Otherwise `item = { symbol: S, quote: toQuote(r.candles.slice(-2), await candles.getLastOkFetchAt(S, "1day"), now) }` → `{ ok: true, item, source: r.source, notice: r.notice }`.
+6. **`watchlist-service.test.ts`** (MemoryWatchlistStore + MemoryCandleStore + FakeProvider + fixed clock; synthetic candles; **use a distinct symbol per test** because `getChartCandles` keeps a module-level in-flight map):
+   1. list: a cached ticker (two candles) has a quote; a cold ticker has `quote: null`; the stale flag is set; order follows `sortOrder`.
+   2. add happy: 1 search call, `sortOrder = max+1`, item returned with its cached quote; **0 `getCandles` provider calls**.
+   3. add invalid `"a;b"` / `42` / a 21-char string → 400, 0 calls.
+   4. duplicate → 409, 0 calls.
+   5. full (30 rows) → 409, 0 calls.
+   6. not found → 404, nothing inserted.
+   7. non-US → 422, nothing inserted.
+   8. budget full → 429 with `retryAfterSeconds` 60, nothing inserted.
+   9. insert race (`insert` returns `"duplicate"`) → 409.
+   10. remove ok / missing → 404.
+   11. reorder: `[C,A,B]` from `[A,B,C]` → `setSortOrders` gets only the changed rows, and `list()` then reads C, A, B.
+   12. reorder mismatch (an extra or missing symbol) → 409.
+   13. reorder bad body (not an array, duplicates, invalid symbol) → 400.
+   14. refresh: not in the list → 404, 0 calls; cold → 1 `getCandles` call with `from` undefined, `source:"api"`, quote from the last 2; fresh cache → 0 calls, `source:"cache"`.
+   15. `failNext("list")` → 503 `cache_unavailable`.
 
 **Done when:**
-- the tests pass, with 0 real network calls (the fake fetch asserts the host);
-- build and lint pass;
-- `grep -rn "twelvedata" app components` returns nothing.
+- all new tests pass; build, lint and test pass; `tsc` is clean;
+- `grep -rn "createSupabaseAdminClient" lib/watchlist` → no output (the watchlist never uses the secret key).
 
 **Risks:**
-- Error-in-HTTP-200 is easy to miss, so it is covered by a test.
-- Never log full request URLs or headers.
-- The provider must stay the only file that knows Twelve Data's URL or shapes.
+- RLS is the real guard. `user_id` is never taken from input.
+- `Promise.all` updates aren't atomic. A partial failure leaves a mixed order but no lost rows, and the client reloads on error.
+- 2 cache queries per row (≤ 60 for 30 rows) is acceptable for one user.
 
-### P1-T5 – Candle store: interface, Supabase implementation, in-memory test double
+### P2-T7 – Watchlist API routes
 **Files:**
-- `lib/cache/candle-store.ts`
-- `lib/cache/supabase-candle-store.ts` (+ `supabase-candle-store.test.ts`, `supabase-candle-store.integration.test.ts`)
-- `test/helpers/memory-candle-store.ts`
-- `test/helpers/candle-store-contract.ts`
-- `test/memory-candle-store.test.ts`
+- Create:
+  - `lib/watchlist/deps.ts`
+  - `app/api/watchlist/route.ts` (+ `route.test.ts`)
+  - `app/api/watchlist/refresh/route.ts` (+ `route.test.ts`)
 
 **Steps:**
-1. `candle-store.ts` (types only, no `server-only`):
+1. **`lib/watchlist/deps.ts`** (`import "server-only"`): `buildWatchlistDeps(supabase): WatchlistDeps` → `{ watchlist: createSupabaseWatchlistStore(supabase), candles: createSupabaseCandleStore(createSupabaseAdminClient()), provider: getDataProvider() }`. It may throw `ConfigError`.
+2. **Common flow** for every handler (`export const dynamic = "force-dynamic"`):
+   1. In an outer try: `const { supabase, user } = await getAuthContext()`.
+   2. `!user` → `errorJson(401, "unauthorized", "Log in to use the watchlist.")`.
+   3. `deps = buildWatchlistDeps(supabase)`.
+   4. A `ConfigError` anywhere here → log the missing names → 500 `config`, `"Server configuration is incomplete."`
+   5. A JSON body is read with `await request.json()` in its own try. A failure, or a non-object → 400 `invalid_body`.
+   6. A service failure → `errorJson(f.status, f.error.code, f.error.message, f.retryAfterSeconds)`.
+   7. Any other throw → log `err.message` only → 500 `provider_error`, `"Something went wrong with the watchlist. Check the server logs."`
+3. **`app/api/watchlist/route.ts`**:
+   - `GET` → `listWatchlist` → `jsonNoStore({ items } satisfies WatchlistResponse)`.
+   - `POST` body `{ symbol }` → `addToWatchlist(body.symbol)` → `jsonNoStore({ item } satisfies WatchlistItemResponse, 201)`.
+   - `DELETE` `?symbol=` → `removeFromWatchlist(searchParams.get("symbol"))` → `new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } })`.
+   - `PATCH` body `{ symbols }` → `reorderWatchlist(body.symbols)` → `jsonNoStore({ items })`, re-listing after the save so the client gets the truth.
+4. **`app/api/watchlist/refresh/route.ts`**: `POST` body `{ symbol }` → `refreshWatchlistSymbol` → `jsonNoStore({ item, source, notice } satisfies WatchlistRefreshResponse)`. A `ChartCandlesFailure` maps through the same `errorJson`, including `Retry-After`.
+5. **Tests** (mock `@/lib/auth/session`, `@/lib/watchlist/deps`, `@/lib/watchlist/watchlist-service`, following the Phase 1 route-test pattern):
+   - Each method with no user → 401, `no-store`, service not called.
+   - `ConfigError` from deps → 500 `config`, with no var name in the body.
+   - GET 200 shape; POST 201; POST bad JSON → 400 `invalid_body`.
+   - POST 429 failure → status 429 + `Retry-After: 60`.
+   - DELETE 204; DELETE missing → 404 body.
+   - PATCH 200 returns the items; PATCH 409 passes through.
+   - refresh 200 with `source`/`notice`; refresh 503 busy → `Retry-After: 3`.
+   - An unexpected throw → generic 500 with no stack.
+
+**Done when:**
+- `npm run build` lists `ƒ /api/watchlist` and `ƒ /api/watchlist/refresh`; lint and test pass; `tsc` is clean.
+- Dev, logged out: `curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/api/watchlist` → `401`, and `-X POST …/api/watchlist/refresh` → `401`.
+
+**Risks:**
+- The routes are thin; all the logic is tested in T6.
+- 204 must not carry a body.
+- The `refresh` route is the only new place that spends candle credits, and only for the user's own tickers.
+
+### P2-T8 – Sidebar UI: API client, paced refresh queue, watchlist component
+**Files:**
+- Create:
+  - `lib/watchlist/client.ts` (+ `.test.ts`)
+  - `lib/watchlist/refresh-queue.ts` (+ `.test.ts`)
+  - `lib/watchlist/events.ts`
+  - `components/watchlist-sidebar.tsx`
+- Change:
+  - `app/(app)/layout.tsx`
+  - `components/chart-view.tsx`
+  - `app/globals.css`
+
+**Steps:**
+1. **`events.ts`**: `export const CANDLES_UPDATED_EVENT = "market-charter:candles-updated";`.
+2. **`client.ts`** (browser-safe; uses `fetchWithAuthRetry`):
    ```ts
-   export type FetchFinalStatus = "ok" | "rate_limited" | "not_found" | "error";
-   export interface FetchCompletion { status: FetchFinalStatus; creditsUsed: number; candlesReceived: number | null; message: string | null }
-   export interface CandleStore {
-     getCandles(symbol: string, interval: Interval): Promise<Candle[]>;              // ascending, all rows
-     getLatestCandleTs(symbol: string, interval: Interval): Promise<string | null>;  // ISO UTC
-     upsertCandles(symbol: string, interval: Interval, candles: Candle[]): Promise<void>;
-     getLastOkFetchAt(symbol: string, interval: Interval): Promise<Date | null>;     // created_at of latest status='ok'
-     sumCreditsSince(since: Date): Promise<number>;                                  // all symbols
-     acquireFetchLease(symbol: string, interval: Interval, now: Date): Promise<number | null>; // fetch_log id, or null if another pending lease exists
-     completeFetchLease(id: number, completion: FetchCompletion, now: Date): Promise<void>;
+   export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; code: ErrorCode | null; message: string };
+   export function createWatchlistClient(deps = { fetch, sleep }) {
+     return { list(), add(symbol), remove(symbol), saveOrder(symbols), refresh(symbol) } // each returns Promise<ApiResult<…>>
    }
-   export class StoreError extends Error { constructor(message: string, readonly cause?: unknown) { super(message); this.name = "StoreError"; } }
-   export const LEASE_TTL_MS = 60_000;
+   export type RefreshOutcome =
+     | { kind: "fetched" | "cached"; item: WatchlistItem }
+     | { kind: "busy" }
+     | { kind: "limited"; message: string; item: WatchlistItem | null }
+     | { kind: "failed"; message: string }
+     | { kind: "unauthorized" };
+   export function toRefreshOutcome(r: ApiResult<WatchlistRefreshResponse>): RefreshOutcome
    ```
-2. `supabase-candle-store.ts` (`import "server-only"`): `createSupabaseCandleStore(client: SupabaseClient<Database>): CandleStore`.
-   - `getCandles`: `select("ts,open,high,low,close,volume").eq("symbol").eq("interval").order("ts",{ascending:true}).range(offset, offset+999)`. Loop with page size 1000 until a page has < 1000 rows (safety cap 50 pages). Map with `new Date(ts).toISOString()` and `Number()` for numerics, keeping a null `volume`.
-   - `getLatestCandleTs`: order desc, `.limit(1).maybeSingle()`.
-   - `upsertCandles`: no-op for `[]`. Rows `{symbol, interval, ts, open, high, low, close, volume}` in chunks of 1000 with `.upsert(chunk, { onConflict: "symbol,interval,ts" })`.
-   - `getLastOkFetchAt`: `fetch_log` with `status = ok`, order `created_at` desc, limit 1.
-   - `sumCreditsSince`: `select("credits_used").gte("created_at", since.toISOString()).gt("credits_used", 0)`, summed in JS. Paginate like `getCandles`, although rows/day are bounded by about 800.
-   - `acquireFetchLease`:
-     1. `update({ status:"expired", completed_at: now, message:"lease expired" }).eq("symbol").eq("interval").eq("status","pending").lt("created_at", new Date(now - LEASE_TTL_MS).toISOString())`;
-     2. `insert({ symbol, interval, status:"pending", credits_used:1, created_at: now.toISOString() }).select("id").single()`. Pass `created_at` explicitly so every time comparison uses the app's injected clock: it keeps tests deterministic and the contract test's "acquire at now − 61 s" works against real Supabase;
-     3. if `error.code === "23505"` → return `null`.
-   - `completeFetchLease`: `update({ status, credits_used, candles_received, message, completed_at: now }).eq("id", id)`.
-   - Any other `error` from supabase-js → throw `StoreError` with a message like `"Supabase getCandles failed: <error.message>"`, never including keys.
-3. `test/helpers/memory-candle-store.ts`: `class MemoryCandleStore implements CandleStore`, the same semantics in memory: one pending lease per series, expiry after `LEASE_TTL_MS`, `created_at` taken from the `now` passed in. Test-only helpers:
-   - `logRows()` returns a copy of fetch_log rows;
-   - `seedCandles()`;
-   - `seedLog(row)`;
-   - `failNext(method)` makes the next call throw `StoreError`.
-4. `test/helpers/candle-store-contract.ts`: `runCandleStoreContract(name, makeStore: () => Promise<{ store: CandleStore; cleanup(): Promise<void> }>, symbolPrefix: string)`. Shared `describe` blocks cover:
-   - upsert then get round-trip, including ordering and null volume;
-   - upsert overwrites the same ts;
-   - latest ts;
-   - lease acquire → second acquire null → complete → acquire again works;
-   - a stale pending row (seeded via acquire at `now - 61s`) is expired by the next acquire;
-   - `getLastOkFetchAt` only counts `ok`;
-   - `sumCreditsSince` boundaries.
+   - Requests:
+     - `list` → GET `/api/watchlist`;
+     - `add` → POST `{symbol}`;
+     - `remove` → DELETE `?symbol=${encodeURIComponent(s)}` (204 → `data: null`);
+     - `saveOrder` → PATCH `{symbols}`;
+     - `refresh` → POST `/api/watchlist/refresh`.
+     - All send `Content-Type: application/json` where there's a body.
+   - Error mapping:
+     - network throw → `{ok:false, status:0, code:null, message:"Couldn't reach the server."}`;
+     - final 401 → `code "unauthorized"`, message `"Your session has expired. Log in again."`;
+     - other non-OK → the body's `error.code`/`message`, falling back to `"Something went wrong. Try again."`;
+     - unparsable OK body → `status 0`, `"Unexpected response from the server."`
+   - `toRefreshOutcome`:
+     - ok + `notice?.code === "rate_limited"` → `limited` (with item);
+     - ok + `notice?.code === "busy"` → `busy`;
+     - ok + `source === "api"` → `fetched`;
+     - ok + other notice → `failed` with `notice.message`;
+     - ok + no notice → `cached`;
+     - status 429 → `limited`;
+     - 503 with code `busy` → `busy`;
+     - 401 → `unauthorized`;
+     - anything else → `failed`.
 
-   Use symbols starting with `symbolPrefix`.
-5. `test/memory-candle-store.test.ts` runs the contract against `MemoryCandleStore` (prefix `ZZTEST`).
-6. `supabase-candle-store.test.ts` (no network) uses `createSupabaseAdminClient`-style `createClient<Database>("https://example.supabase.co", "test-secret", { global: { fetch: fakeFetch } })` with a fake fetch that returns canned PostgREST responses:
-   - (a) `getCandles` makes 2 requests when the first page returns 1000 rows and the second 5, giving 1005 candles with numbers (not strings) and ISO `ts`;
-   - (b) `upsertCandles` with 2500 rows makes 3 POSTs whose URL contains `on_conflict=symbol%2Cinterval%2Cts` (or the unencoded form);
-   - (c) lease insert answered `409 {"code":"23505", ...}` → `acquireFetchLease` returns `null`;
-   - (d) `500 {"message":"boom"}` → `StoreError`;
-   - (e) no request URL or body contains `"test-secret"` (it is only in headers).
-7. `supabase-candle-store.integration.test.ts`: `describe.skipIf(!(process.env.RUN_SUPABASE_TESTS === "1" && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SECRET_KEY))`. Runs the contract against the real project with prefix `ZZTEST`. `cleanup` deletes **only** rows `where symbol like 'ZZTEST%'` from `candles` and `fetch_log`. This is the plan's only delete, and it touches test rows only. Vitest doesn't load `.env.local`, so document that the test runs with env exported, for example `set -a; . ./.env.local; set +a; RUN_SUPABASE_TESTS=1 npm test`.
-
-**Done when:**
-- the contract passes on the memory store;
-- fake-fetch tests (a)–(e) pass;
-- the integration test is reported as **skipped** in a normal `npm test`;
-- build and lint pass.
-
-**Needs keys:** the integration contract against real Supabase (run in P1-T9).
-
-**Risks:**
-- The 1000-row cap silently truncates history without pagination, so it is covered by test (a).
-- A wrong `onConflict` string gives duplicate-key errors.
-- The secret key bypasses RLS, so this module is server-only.
-
-### P1-T6 – Cache-first candle service (freshness, budget guard, lease, de-dupe)
-**Files:**
-- `lib/candles/api-types.ts`
-- `lib/candles/limits.ts`
-- `lib/candles/get-chart-candles.ts` (+ `get-chart-candles.test.ts`)
-- `test/helpers/fake-provider.ts`
-
-**Steps:**
-1. `api-types.ts` (types only, shared by route and client):
+   Tests cover every branch, with a fake fetch.
+3. **`refresh-queue.ts`** (pure, injected deps):
    ```ts
-   export interface ApiCandle { time: number; open: number; high: number; low: number; close: number; volume: number | null } // time = UTC seconds
-   export type NoticeCode = "rate_limited" | "busy" | "provider_unavailable" | "provider_error";
-   export interface Notice { code: NoticeCode; message: string }
-   export type ErrorCode = "invalid_symbol" | "invalid_interval" | "not_found" | "forbidden" | "rate_limited" | "busy" | "provider_unavailable" | "provider_error" | "cache_unavailable" | "config";
-   export interface CandlesResponse { symbol: string; interval: Interval; candles: ApiCandle[]; source: "cache" | "api"; stale: boolean; notice: Notice | null }
-   export interface ErrorResponse { error: { code: ErrorCode; message: string } }
+   export interface RefreshQueueDeps {
+     refresh(symbol: string): Promise<RefreshOutcome>;
+     sleep(ms: number): Promise<void>;
+     isCancelled(): boolean;
+     onItem(item: WatchlistItem): void;
+     onProgress(done: number, total: number): void;
+   }
+   export type QueueEnd = { status: "done" | "cancelled" | "unauthorized"; message: null } | { status: "limited"; message: string };
+   export async function runRefreshQueue(queue: string[], deps: RefreshQueueDeps): Promise<QueueEnd>
    ```
-2. `limits.ts`: `CREDITS_PER_MINUTE = 8`, `CREDITS_PER_DAY = 800`, `CREDITS_PER_CALL = 1`, `BUSY_RETRY_SECONDS = 3`.
-3. `get-chart-candles.ts` (`import "server-only"`):
-   - Signature: `getChartCandles(symbol: string, interval: Interval, deps: { store: CandleStore; provider: DataProvider; now?: () => Date }): Promise<ChartCandlesResult>`, where:
-     ```ts
-     type ChartCandlesResult =
-       | { ok: true; candles: Candle[]; source: "cache" | "api"; stale: boolean; notice: Notice | null }
-       | { ok: false; status: 403 | 404 | 429 | 502 | 503; error: { code: ErrorCode; message: string }; retryAfterSeconds: number | null };
-     ```
-   - The symbol is already normalised by the caller.
-   - Algorithm:
-     1. **In-process de-dupe first (synchronous, before any await):** `key = \`${symbol}:${interval}\``. If `inFlight.has(key)`, return `inFlight.get(key)`. Otherwise `p = load(symbol, interval, deps)`, `inFlight.set(key, p)`, and `try { return await p } finally { inFlight.delete(key) }`. `inFlight` is a module-level `Map<string, Promise<ChartCandlesResult>>`. The whole call is de-duped, including the freshness reads, so the result doesn't depend on microtask ordering.
-     2. `load`: read `latestTs = store.getLatestCandleTs()` and `lastOk = store.getLastOkFetchAt()`. If `isDailyCacheFresh(...)` → `{ ok, candles: store.getCandles(), source:"cache", stale:false, notice:null }`. **No provider call, no fetch_log write.** Otherwise continue with step 3.
-     3. Budget guard:
-        - `minute = sumCreditsSince(now − 60 s)`. If `minute ≥ 8` → `limited("minute", 60)`.
-        - `day = sumCreditsSince(UTC midnight of now)`. If `day ≥ 800` → `limited("day", secondsUntilNextUtcMidnight)`.
-     4. `leaseId = acquireFetchLease(symbol, interval, now)`. If `null` → `busy()`.
-     5. `from = latestTs ? dailyTsToDate(latestTs) : undefined`, then call `provider.getCandles(symbol, interval, from)`.
-     6. On success:
-        - `E = expectedLatestDailyCandleDate(now)`; `keep = candles.filter(c => dailyTsToDate(c.ts) <= E)`;
-        - `upsertCandles(keep)`;
-        - `completeFetchLease(leaseId, { status:"ok", creditsUsed:1, candlesReceived: candles.length, message:null })`;
-        - `all = getCandles()`;
-        - if `all` is empty → `{ ok:false, status:404, code:"not_found" }`;
-        - else `{ ok:true, candles: all, source:"api", stale:false, notice:null }`.
-     7. On `ProviderError`, complete the lease with `creditsUsed: 1`:
-        - `rate_limited` → status `rate_limited`, then `limited("provider", 60)`.
-        - `not_found` → status `not_found`; `{ ok:false, 404, "not_found" }` if the cache is empty, else serve the cache with a `provider_error` notice.
-        - `forbidden` → status `error`; 403 `forbidden` if the cache is empty, else cache plus notice.
-        - `unavailable` → status `error`; 502 `provider_unavailable`, or cache plus notice.
-        - `auth` / `bad_response` → status `error`; 502 `provider_error`, or cache plus notice.
+   - Loop `for (let i = 0; i < queue.length; i++)`, re-reading `queue.length` each time so symbols appended while it runs are picked up.
+   - Before each item, `isCancelled()` → `cancelled`.
+   - Call `refresh`:
+     - `fetched` → `onItem`, then `sleep(REFRESH_PACE_MS)` (skipped after the last item);
+     - `cached` → `onItem`, no sleep;
+     - `busy` → `sleep(REFRESH_BUSY_RETRY_MS)` and retry the same symbol, up to `MAX_REFRESH_BUSY_RETRIES`, then skip;
+     - `failed` → skip, then `sleep(REFRESH_PACE_MS)` (a credit may have been spent);
+     - `limited` → `onItem(item)` if there's an item, then return `{status:"limited", message}`;
+     - `unauthorized` → return `unauthorized`.
+   - Call `onProgress(i + 1, queue.length)` after each symbol.
 
-        Store the provider message (max 500 chars) in `message`.
-     8. `limited(kind, retryAfter)` and `busy()` serve the cache when it isn't empty: `{ ok:true, source:"cache", stale:true, notice:{code, message} }`. Otherwise:
-        - limited → `{ ok:false, 429, "rate_limited", retryAfterSeconds }`;
-        - busy → `{ ok:false, 503, "busy", retryAfterSeconds: 3 }`.
-     9. Any `StoreError`, at any step, → `{ ok:false, 503, "cache_unavailable" }`. **The provider is never called if the store can't be read or the lease can't be written.** If `completeFetchLease` itself throws after a successful provider call, still return the candles (log `console.error`), because the stuck row expires after 60 s.
-   - User-facing messages, exact text (`${S}` = symbol):
-     - minute limit: `"Twelve Data's free-plan limit (8 calls a minute) has been reached. Try again in about a minute."`
-     - day limit: `"Twelve Data's daily limit (800 calls) has been reached. It resets at midnight UTC (1 pm NZDT / 12 pm NZST)."`
-     - provider 429: `"Twelve Data says the free-plan limit has been reached. Try again in about a minute."`
-     - When serving cache with any notice, prefix `"Showing cached data. "`.
-     - busy: `` `${S} is being loaded by another request. Retrying shortly…` ``
-     - not_found: `` `No US ticker "${S}" was found at Twelve Data.` ``
-     - forbidden: `` `${S} isn't available on the Twelve Data free plan.` ``
-     - provider_unavailable: `"Couldn't reach Twelve Data. Try again shortly."`
-     - provider_error: `"Twelve Data returned an unexpected error. Check the server logs."`
-     - cache_unavailable: `"The price cache (Supabase) isn't reachable right now. Try again shortly."`
-4. `test/helpers/fake-provider.ts`: `FakeProvider implements DataProvider`. It records `calls: {symbol, interval, from}[]`, returns queued results or errors, and has an optional `delayMs` for concurrency tests.
-5. `get-chart-candles.test.ts` (MemoryCandleStore + FakeProvider + fixed `now`; all synthetic data). Each case asserts `provider.calls.length` and `store.logRows()`:
-   1. Empty cache → 1 call with `from` undefined; candles stored; one log row `ok`, credits 1; `source:"api"`.
-   2. **Second load right after (1) → 0 provider calls, log rows still 1, `source:"cache"`.** This is the unit proof of acceptance #3.
-   3. Stale incremental: cache up to `2026-11-20`, now Wed 2026-11-25T17:00Z → 1 call with `from:"2026-11-20"`. The provider returns 11-20…11-25; **11-25 (in-progress) is not stored**; the result ends at 11-24. A repeat call → 0 calls.
-   4. Holiday: cache to `2026-11-25`, now 2026-11-27T01:00Z. The provider returns only 11-25 → stored, log `ok`. A repeat call → 0 calls (clause b).
-   5. Minute guard: seed log rows summing 8 credits within 60 s:
-      - with cache → 0 calls, `stale:true`, notice `rate_limited`;
-      - without cache → `ok:false`, 429, `retryAfterSeconds: 60`, no new log row.
-   6. Day guard: 800 credits since UTC midnight (spread > 60 s ago) → 429 with retry-after = seconds to midnight UTC.
-   7. Provider 429 → log row `rate_limited`, credits 1; empty cache → 429; with cache → stale and notice.
-   8. Lease held: seed a pending row created 10 s ago → 0 calls; empty cache → 503 `busy`, retry 3; with cache → stale and notice `busy`.
-   9. Expired lease: pending row created 61 s ago → the old row becomes `expired`, 1 call, new row `ok`.
-   10. Same-instance concurrency: `Promise.all` of two calls with provider `delayMs: 20` → **1 provider call**, both results `ok`, 1 log row.
-   11. `not_found` with empty cache → 404, log `not_found`.
-   12. `unavailable` with cache → stale cache with notice `provider_unavailable`; log `error`.
-   13. Store failure (`failNext("getLatestCandleTs")`) → 503 `cache_unavailable` and **0 provider calls**.
-   14. `completeFetchLease` failure after a successful fetch → still `ok:true`.
+   Tests (fake sleep that records ms):
+   - 3 fetched → sleeps `[10000, 10000]`;
+   - cached items → no sleeps;
+   - busy twice then fetched → sleeps `[3000, 3000]` then success;
+   - busy 4 times → skipped after 3 retries;
+   - limited on the 2nd → stops, the 3rd is never refreshed;
+   - unauthorized stops;
+   - a symbol appended during the 1st refresh gets processed;
+   - cancelled before the 2nd → stops.
+4. **`components/watchlist-sidebar.tsx`** (`"use client"`). State:
+   - `items: WatchlistItem[]`;
+   - `loadState: "loading" | "ready" | "error"`;
+   - `message: { kind: "error" | "status"; text: string; login?: boolean } | null`;
+   - `queueStatus: { running: boolean; done: number; total: number; paused: string | null }`;
+   - `input`, `adding`.
+
+   Behaviour:
+   - **Mount:** `client.list()`. Set state only after the await. On success, start the queue with the symbols where `quote === null || quote.stale`.
+   - **Queue:** keep one queue at a time.
+     - The `queueRef` array plus a `runningRef` flag.
+     - `enqueue(symbols)` appends symbols not already in `queueRef` and starts `runRefreshQueue` if it isn't running.
+     - `onItem` merges the item into `items` by symbol.
+     - At the end: `limited` → `queueStatus.paused = message`; `unauthorized` → `message` with `login: true`.
+     - On unmount, set the cancel flag.
+   - **Add form:**
+     - `<form>` with `<label>` "Add ticker", `<input name="symbol" maxLength={10} autoComplete="off">` and a button "Add" ("Checking…" while `adding`).
+     - On submit: `client.add(input)`.
+       - ok → append the item, clear the input, `message = { kind: "status", text: `${symbol} added.` }`, and `enqueue([symbol])` if its quote is null or stale.
+       - fail → `message = { kind: "error", text: r.message }` (plus a `login` link on 401).
+   - **Rows** (`<ol className="watchlist">`). Each `<li>`, with `aria-current="page"` when `usePathname() === `/chart/${symbol}``, contains:
+     - `<Link href={`/chart/${symbol}`}>{symbol}</Link>`;
+     - with a quote:
+       - `<span className="price">{formatPrice(lastClose)}</span>`;
+       - `<span className={`change ${changeClass(changePct)}`}>{formatChangePct(changePct)}</span>`;
+       - `<span className="muted">{formatNzDate(asOf)}{stale ? " · updating…" : ""}</span>`;
+     - without a quote: `<span className="muted">Not loaded yet</span>`;
+     - buttons with `aria-label`s `Move ${symbol} up` (disabled on the first row), `Move ${symbol} down` (disabled on the last) and `Remove ${symbol}`.
+   - **Reorder:** swap optimistically, then `client.saveOrder(newSymbols)`.
+     - ok → `items` takes the server's order, mapping quotes by symbol.
+     - 409 → reload via `client.list()` and show its message.
+     - other failure → revert, then show the message.
+   - **Remove:** remove optimistically, then `client.remove`. A failure restores the previous list and shows the message.
+   - **Status line** under the heading (`role="status"`):
+     - running → `Updating prices… (${done} of ${total})`;
+     - paused → `Paused: ${paused} ` plus a `<button>` "Retry", which re-enqueues the remaining stale or cold symbols;
+     - otherwise nothing.
+   - **Header row:** `<p className="muted">Last close (USD) · day change</p>`.
+   - **Empty list:** `<p className="muted">No tickers yet. Add one above, e.g. AAPL.</p>`.
+   - **`CANDLES_UPDATED_EVENT`:** a `window` listener calls `client.list()` and merges the quotes (it does not restart the queue). Remove the listener on unmount.
+5. **`app/(app)/layout.tsx`**: replace the placeholder `<aside>` content with `<WatchlistSidebar />`, keeping `<aside className="sidebar" aria-label="Watchlist">`.
+6. **`components/chart-view.tsx`**: in the effect, after `setState(next)`, if `next.kind === "ready" && next.data.source === "api"`, call `window.dispatchEvent(new Event(CANDLES_UPDATED_EVENT))`.
+7. **CSS**:
+   - `.watchlist { list-style: none; padding: 0; margin: 0; } .watchlist li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 6px 4px; border-bottom: 1px solid #eee; }`
+   - `.watchlist li[aria-current="page"] { background: #eef4ff; }`
+   - `.watchlist .actions { grid-column: 1 / -1; display: flex; gap: 4px; }`
+   - `.up { color: #137333; } .down { color: #c5221f; } .flat { color: #555; }`
+   - `.price, .change { font-variant-numeric: tabular-nums; text-align: right; }`
 
 **Done when:**
-- all 14 cases pass;
-- build and lint pass;
-- the service imports nothing from `@/lib/data-provider/twelve-data` (only the `DataProvider` type).
+- build, lint and test pass, with the client and queue tests green; `tsc` is clean;
+- `grep -rn "twelvedata\|SUPABASE_SECRET\|TWELVE_DATA" components lib/watchlist/client.ts lib/watchlist/refresh-queue.ts` → no output;
+- the dev server renders (after O2, logged in by hand or in T9); the full UI proof is T9.
 
 **Risks:**
-- The in-flight Map is per instance, which is why the DB lease exists.
-- The minute/day budget guard (read sums, then call) isn't atomic across *different* symbols on separate serverless instances. Two cold loads at 7/8 could both pass, giving at most a 1–2 credit overshoot, and Twelve Data's own 429 is still handled. This is accepted for a single user; no extra locking.
-- Unknown tickers never become "fresh", so each reload of a bad ticker spends 1 credit (capped by the guard). A negative cache (e.g. skip re-fetching a `not_found` series for 24 h) is deferred and only worth doing if it shows up in `fetch_log`.
-- Counting credits on 429s is conservative and could slightly under-use the budget. That's acceptable.
-- Stored `fetch_log` messages come from the provider; make sure no URL or key gets in.
+- The `react-hooks/set-state-in-effect` lint rule: start async work in the effect and set state only after awaits.
+- If two tabs each run a queue, they could exceed 6/min combined. The budget guard stops them both with a clear message (accepted).
+- Optimistic updates must restore state on failure.
 
-### P1-T7 – API route `GET /api/candles/[symbol]`
-**Files:** `app/api/candles/[symbol]/route.ts`, `app/api/candles/[symbol]/route.test.ts`
+### P2-T9 – Live acceptance proof (orchestrator steps O1–O3 done first)
+No code, except fixes the proof exposes, which go back through review. Use `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` for every Node process. Run Playwright with the global install (`/opt/node22/bin/playwright`, Chromium) from a script in the session scratchpad, **not committed**. Save screenshots to `docs/evidence/p2-t9-*.png`, and record every output and SQL result in PROGRESS.md. **Before starting, note `select count(*), coalesce(sum(credits_used),0) from fetch_log where created_at >= date_trunc('day', now() at time zone 'utc')`.**
 
 **Steps:**
-1. `route.ts`:
-   - `export const dynamic = "force-dynamic";`
-   - `export async function GET(request: Request, { params }: { params: Promise<{ symbol: string }> })`.
-2. Flow:
-   1. `raw = (await params).symbol`; `symbol = normaliseSymbol(raw)`. If null → 400 `invalid_symbol` with message `` `"${raw}" isn't a valid ticker. Use 1–10 letters, digits, '.' or '-', e.g. AAPL.` `` (slice `raw` to 20 chars).
-   2. `interval = new URL(request.url).searchParams.get("interval") ?? "1day"`. If it's not in `SUPPORTED_INTERVALS` → 400 `invalid_interval`, message `"Only daily candles (1day) are available."`.
-   3. Build deps inside `try`: `store = createSupabaseCandleStore(createSupabaseAdminClient())`, `provider = getDataProvider()`. On `ConfigError` → `console.error("Missing env:", err.missing)`, then 500 `config`, message `"Server configuration is incomplete."`.
-   4. `result = await getChartCandles(symbol, interval, { store, provider })`.
-   5. If ok → 200 `CandlesResponse`, with `candles` mapped to `ApiCandle` (`time = Date.parse(ts)/1000`). If not → `ErrorResponse` with `result.status`, plus `Retry-After` when `retryAfterSeconds` is set.
-   6. Every response sets `Cache-Control: no-store`.
-   7. Any other unexpected throw → 500 `provider_error`, generic message, `console.error`.
-3. `route.test.ts`:
-   - `vi.mock("@/lib/candles/get-chart-candles")`, `vi.mock("@/lib/supabase/admin")`, `vi.mock("@/lib/data-provider")` (factories return dummies).
-   - Call `GET(new Request("http://localhost/api/candles/aapl"), { params: Promise.resolve({ symbol: "aapl" }) })`.
-   - Assert:
-     - 200: the service received `"AAPL"`/`"1day"`; body matches `CandlesResponse` (`time` = seconds); `Cache-Control: no-store`.
-     - `symbol "A;B"` → 400 and the service is not called.
-     - `?interval=1h` → 400.
-     - Service 429 → status 429, `Retry-After: 60`, `error.code` `rate_limited`.
-     - Service 503 busy → `Retry-After: 3`.
-     - `getDataProvider` throws `ConfigError(["TWELVE_DATA_API_KEY"])` → 500, and the body contains neither the var value nor the stack.
-     - Stale-with-notice result → 200 with `notice`.
+1. `set -a; . ./.env.local; set +a; RUN_SUPABASE_TESTS=1 npm test` → everything passes, including the `getRecentCandles` contract case against the real database (0 Twelve Data credits). Then `npm run lint && npm run build && npm start`.
+2. **Logged-out gate** (curl):
+   - `/` → 307 `/login`;
+   - `/chart/AAPL` → 307 `/login?next=%2Fchart%2FAAPL`;
+   - `/api/candles/AAPL` → 401 JSON;
+   - `/api/watchlist` → 401;
+   - `POST /api/watchlist/refresh` → 401;
+   - `/login` → 200.
+   - The `fetch_log` count is unchanged.
+3. **Sign-ups refused:** `curl -s -X POST "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/signup" -H "apikey: $NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" -H "Content-Type: application/json" -d '{"email":"stranger@example.com","password":"Str4nger-pass-123"}'` → an error (signups disabled). Record the HTTP code and message. SQL: no `stranger@example.com` in `auth.users`.
+4. **Login (Playwright, desktop 1280×800):**
+   - `/login` with a wrong password → the alert "Email or password is incorrect."
+   - The right credentials (`E2E_USER_*`) → land on `/`, and the header shows the email.
+   - Then open `/chart/AAPL` directly → the chart renders (`source` cache).
+   - **Screenshot `p2-t9-login-error.png`.**
+5. **Add** in the sidebar:
+   - `AAPL` → the row shows price, %, date and **no** "Not loaded yet".
+   - `MSFT` → same.
+   - `NVDA` (cold) → appears with "Not loaded yet", then within 30 s shows a price.
+   - SQL: `select symbol, "interval", status, credits_used, message from fetch_log where created_at > <step-start>` order by id → AAPL/MSFT/NVDA `symbol_search ok` and NVDA `1day ok`.
+   - If AAPL or MSFT were stale at run time (after 18:00 ET), also expect one `1day ok` row each from the queue, paced ≥ 10 s apart.
+6. **Rejects:**
+   - `ZZZZQX` → the alert `No US-listed ticker "ZZZZQX" was found at Twelve Data.`, plus a `symbol_search not_found` row whose message has the match summary;
+   - `AAPL` again → "AAPL is already in your watchlist." with **no** new `fetch_log` row;
+   - `a;b` → the invalid-ticker message with **no** row.
+   - **Screenshot `p2-t9-sidebar-desktop.png`.**
+7. **Sidebar values vs the cache:**
+   - SQL: `select symbol, ts, close from (select symbol, ts, close, row_number() over (partition by symbol order by ts desc) rn from candles where "interval"='1day' and symbol in ('AAPL','MSFT','NVDA')) s where rn <= 2 order by symbol, ts`.
+   - Compute (last − prev) / prev × 100 and compare with the displayed price and % (2 dp) and date for each ticker. Record both.
+8. **Reorder:**
+   - click "Move NVDA up" twice → order NVDA, AAPL, MSFT;
+   - reload → the same order;
+   - SQL `select symbol, sort_order from watchlist order by sort_order` → matches;
+   - `user_id` = the e2e user's id for all rows.
+9. **Remove** MSFT → gone; reload → still gone; SQL → 2 rows.
+10. **Cache-only reads:**
+    - note the `fetch_log` count;
+    - reload `/` 3 times and open `/chart/AAPL` from the sidebar;
+    - the count is unchanged (all fresh, so the queue is idle).
+    - Playwright request log: only same-origin requests (`/`, `/chart/AAPL`, `/api/watchlist`, `/api/candles/AAPL`, `/_next/…`); none to `twelvedata.com` or `supabase.co` from the browser.
+11. **RLS:**
+    - `curl "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/watchlist?select=*" -H "apikey: $NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"` (no user JWT) → permission denied or `[]`, and never the e2e rows;
+    - SQL `select relname, relrowsecurity from pg_class where relname in ('watchlist','candles','fetch_log','indicator_prefs')` → all `true`.
+12. **Phone layout:** 390×844, logged in → the sidebar stacks above the content. **Screenshot `p2-t9-sidebar-phone.png`.**
+13. **Logout:** click "Log out" → on `/login`; open `/chart/AAPL` → redirected to `/login?next=…`.
+14. **Credits:** re-run the day-total SQL; record the Phase 2 spend and the peak per minute (from `created_at`).
 
 **Done when:**
-- the route tests pass;
-- build and lint pass;
-- `next build` output lists `ƒ /api/candles/[symbol]` (dynamic).
+- steps 1–14 are recorded with outputs and screenshots, and every acceptance box can be ticked;
+- the credits spent match the estimate below (≤ 15).
 
 **Risks:**
-- `params` must be awaited (Next 16).
-- Never return raw error objects.
-- No secrets in responses or logs.
-
-### P1-T8 – Chart page (v5 API), NZ-time labels, footer attribution
-**Files:**
-- `app/chart/[symbol]/page.tsx`
-- `components/chart-view.tsx`
-- `components/candle-chart.tsx`
-- `components/site-footer.tsx` (+ `site-footer.test.tsx`)
-- `lib/chart/to-chart-data.ts` (+ `.test.ts`)
-- `app/layout.tsx` (add footer)
-
-**Steps:**
-1. `lib/chart/to-chart-data.ts` (pure): `toChartData(candles: ApiCandle[]): CandlestickData<UTCTimestamp>[]`, sorted ascending, de-duped by time, with `time as UTCTimestamp`. Use type-only imports from `lightweight-charts`. Test: unsorted input with a duplicate → sorted unique output with the OHLC fields.
-2. `components/site-footer.tsx` (server component) renders:
-   ```tsx
-   <footer>
-     <p>Charts: TradingView Lightweight Charts™ Copyright (c) 2025 TradingView, Inc.{" "}
-       <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">https://www.tradingview.com/</a></p>
-     <p>Times shown in New Zealand time (Pacific/Auckland).</p>
-   </footer>
-   ```
-   Add `<SiteFooter />` in `app/layout.tsx` after `<main>`. Test with `renderToStaticMarkup`: it contains `TradingView Lightweight Charts™ Copyright (c) 2025 TradingView, Inc.` and `href="https://www.tradingview.com/"`.
-3. `components/candle-chart.tsx` (`"use client"`), props `{ candles: ApiCandle[] }`:
-   - `useRef<HTMLDivElement>`.
-   - One `useEffect([candles])`:
-     - `chart = createChart(el, { autoSize: true, layout: { attributionLogo: true }, localization: { locale: "en-NZ", timeFormatter: (t: Time) => typeof t === "number" ? formatNzDate(t) : String(t) }, timeScale: { tickMarkFormatter: (t: Time, type: TickMarkType) => typeof t === "number" ? nzTickMarkLabel(t, type) : null } })`;
-     - `series = chart.addSeries(CandlestickSeries, {}, 0)` (pane index 0 = main pane);
-     - `series.setData(toChartData(candles))`; `chart.timeScale().fitContent()`;
-     - cleanup `chart.remove()`.
-   - Container `<div ref style={{ width: "100%", height: 480 }} />`.
-   - **No v4 calls** (`addCandlestickSeries` etc.).
-4. `components/chart-view.tsx` (`"use client"`), props `{ symbol: string }`:
-   - State is a discriminated union `{kind:"loading"} | {kind:"ready", data: CandlesResponse} | {kind:"error", message: string}`, initialised `{kind:"loading"}`.
-   - `useEffect([symbol])` runs an async function with a `cancelled` flag. It fetches `/api/candles/${encodeURIComponent(symbol)}`:
-     - on 503 with `error.code === "busy"`, wait `Number(res.headers.get("Retry-After") ?? 3)` s and retry, up to 3 times;
-     - on other non-OK, set `error` with `body.error.message`, or `"Something went wrong loading ${symbol}."` if the body is unparsable;
-     - a network failure gives the message `"Couldn't reach the server."`.
-   - **Only call setState after an await** (lint rule `react-hooks/set-state-in-effect`).
-   - Render:
-     - loading → `<p>Loading {symbol}…</p>`;
-     - error → `<div className="error" role="alert">`;
-     - ready → an optional `<div className="notice" role="status">{notice.message}</div>`, then `<CandleChart candles>`, then `<p>Last candle: {formatNzDate(last.time)} · Source: {source === "cache" ? "Supabase cache" : "Twelve Data (just fetched)"}{stale ? " (may be out of date)" : ""}</p>`.
-   - An empty `candles` array (shouldn't happen) → error message `"No candles to show."`.
-5. `app/chart/[symbol]/page.tsx` (server component):
-   - `export default async function Page({ params }: { params: Promise<{ symbol: string }> })`;
-   - `symbol = normaliseSymbol((await params).symbol)`; if null → `notFound()`;
-   - render `<h1>{symbol}</h1><p>Daily candles</p><ChartView key={symbol} symbol={symbol} />`;
-   - `generateMetadata({ params })` awaits params and normalises: valid → title `` `${symbol} – Market Charter` ``; `null` → title `"Chart – Market Charter"` (never throws).
-6. **Secret-leak check** (no keys needed):
-   ```bash
-   TWELVE_DATA_API_KEY=leakcheck-td-9f3a SUPABASE_SECRET_KEY=leakcheck-sb-7c1d NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co npm run build
-   ! grep -rl "leakcheck-" .next/static && ! grep -rl "api.twelvedata.com" .next/static && echo LEAK_CHECK_OK
-   ```
-7. **v5 check:** `grep -rnE "add(Candlestick|Line|Area|Bar|Histogram|Baseline)Series\(" app components lib` returns nothing, and `grep -rn "addSeries(CandlestickSeries" components` returns 1 line.
-
-**Done when:**
-- build, lint and test pass (footer and to-chart-data tests);
-- LEAK_CHECK_OK printed;
-- the v5 grep checks pass;
-- `next build` lists `ƒ /chart/[symbol]`;
-- `npm run dev`: `/chart/AAPL` renders the heading, the "Loading AAPL…" state and the footer, and with no env shows the red "Server configuration is incomplete." box rather than a crash. Check by hand with `curl -s localhost:3000/chart/AAPL | grep -c "TradingView Lightweight Charts"` (expected ≥ 1) and `curl -s -o /dev/null -w "%{http_code}" localhost:3000/api/candles/AAPL` (expected 500 without keys).
-- `/chart/%3B` → 404.
-
-**Needs keys:** seeing real candles drawn (P1-T9).
-
-**Risks:**
-- lightweight-charts touches `window`, so it is only used inside a `"use client"` component's effect.
-- Client code must not import any `server-only` module; the build fails if it does, which is a useful guard.
-
-### P1-T9 – Live acceptance proof (needs Tom's keys and network to Twelve Data and Supabase)
-No code. Run it once `.env.local` exists and the session (or Tom's machine) can reach `api.twelvedata.com` and `<project-ref>.supabase.co`. This cloud session currently **cannot** reach either host. Record every output in PROGRESS.md.
-
-**Steps:**
-1. Apply the migration (README "Database setup"). In the SQL editor run `select relname, relrowsecurity from pg_class where relname in ('candles','fetch_log','watchlist','indicator_prefs');` → 4 rows, all `true`.
-2. `set -a; . ./.env.local; set +a; RUN_SUPABASE_TESTS=1 npm test` → the integration contract passes (0 Twelve Data credits; it deletes only `ZZTEST%` rows).
-3. `npm run build && npm start`.
-4. SQL: `select count(*) from fetch_log where symbol='AAPL';` → 0.
-5. Open `http://localhost:3000/chart/AAPL` → candlestick chart, footer notice, status line "Source: Twelve Data (just fetched)". **Take a screenshot.** SQL: `select symbol, "interval", credits_used, status, candles_received, created_at from fetch_log where symbol='AAPL' order by id;` → 1 row, `ok`, 1 credit.
-6. Reload the page twice, then run `curl -s localhost:3000/api/candles/AAPL | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.source,j.candles.length)})"` → `cache <n>`. Re-run the step 5 SQL → **still 1 row** (acceptance #3). `select count(*), min(ts), max(ts) from candles where symbol='AAPL';` → n rows, with the max equal to the expected latest trading date.
-7. Bad ticker: `/chart/ZZZZQX` → friendly "No US ticker…" box; one `fetch_log` row with status `not_found`.
-8. Concurrency on a never-loaded ticker: `for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/api/candles/MSFT & done; wait` → the codes are 200s (or 503 busy); SQL → **exactly 1** MSFT `fetch_log` row.
-9. Browser devtools Network tab on `/chart/AAPL`: only `/api/candles/AAPL` is requested, nothing to `api.twelvedata.com`.
-10. Vercel (Tom): link the repo, add the 3 env vars, deploy a preview, open `/chart/AAPL` → `source` should be `cache` with 0 new `fetch_log` rows (shared cache).
-11. Next US trading day (optional): reload `/chart/AAPL` → exactly 1 new `ok` row whose request used `start_date` = the previous last date. This is natural proof of the stale path with no data deleted.
-
-**Done when:** steps 1–9 are recorded in PROGRESS.md with SQL output and the screenshot, and step 10 is done or explicitly handed to Tom. Acceptance boxes are ticked only with this proof.
-
-**Risks:**
-- Spend credits only as listed.
-- Don't delete cache or log rows to "force stale" (the brief requires asking first). Staleness is proven by the unit tests and step 11.
-- Rate-limit UX is proven by the unit and route tests, not by burning real credits.
+- Credits are spent only as listed; don't add more tickers to "see more".
+- Don't delete cache or log rows.
+- If step 5 returns `not_found` or `provider_error` for AAPL, the `symbol_search` field names differ from the docs. Stop, record the `fetch_log.message` summary, and send it back to the Planner. Don't guess-fix.
+- The e2e user and its watchlist rows stay afterwards (see "Decisions taken").
 
 ---
 
-## API credit estimate (Phase 1)
+## API credit estimate (Phase 2)
 | Activity | Twelve Data credits |
 |---|---|
-| P1-T1 … P1-T8 (all tests mock the provider; Supabase tests use fake fetch or skip) | **0** |
-| P1-T9 step 2 (Supabase integration tests) | 0 |
-| P1-T9 step 5 (AAPL first load, backfill up to 5000 bars) | 1 |
-| P1-T9 step 6 (repeat loads) | 0 |
-| P1-T9 step 7 (bad ticker) | 1 |
-| P1-T9 step 8 (MSFT concurrency) | 1 |
-| P1-T9 step 10 (Vercel preview, cache hit) | 0 |
-| P1-T9 step 11 (next-day refresh) | 1 |
-| **Expected total** | **≈ 4 credits**. Allow ≤ 15 for retries. Peak ≤ 3 in any minute |
+| P2-T1 … P2-T8 (every test uses FakeProvider or a fake fetch; Supabase tests use a fake fetch or skip) | **0** |
+| T9 step 1 (Supabase integration tests) | 0 |
+| T9 step 2 (logged-out checks) | 0 |
+| T9 step 5: `symbol_search` for AAPL, MSFT, NVDA | 3 |
+| T9 step 5: NVDA backfill (cold) | 1 |
+| T9 step 5: AAPL/MSFT incremental, **only if** the run is after 18:00 New York (23:00 UTC) | 0–2 |
+| T9 step 6: ZZZZQX search | 1 |
+| T9 step 6: duplicate, invalid | 0 |
+| T9 steps 7–13 (cache reads, reorder, remove, chart from cache, logout) | 0 |
+| **Expected total** | **5–7 credits**. Allow ≤ 15 with retries |
 
-This is well within 8/min and 800/day.
+Peak per minute stays ≤ 5, because adds are manual and the queue is paced at 10 s. Today's running total is 4 + ≤ 15 = ≤ 19, against 800/day.
+
+**Steady-state cost of the feature (for Tom):**
+- **First load of a 10-ticker watchlist, all cold:**
+  - adding the tickers = 10 `symbol_search` credits (one per add);
+  - the sidebar then backfills 10 tickers at ≤ 6/min = 10 credits over about 100 s;
+  - **one-off total ≈ 20 credits.**
+  - The minute cap can't be breached by the queue alone. If adds and chart opens push past 8/min, the budget guard refuses the call before it reaches Twelve Data. The queue pauses with "Paused: Twelve Data's free-plan limit (8 calls a minute)… Click Retry", and rows keep their cached values or "Not loaded yet".
+- **Every US trading day afterwards:** 1 incremental credit per ticker, once, after 18:00 New York (≈ noon NZ). That's 10/day for 10 tickers, plus any non-watchlist charts.
+- **Viewing the sidebar:** 0 credits. `GET /api/watchlist` is cache-only, and `/quote` is never used.
 
 ---
 
 ## Open questions for Tom
-1. **Keys and network for the live proof (P1-T9).** This cloud session has no Twelve Data or Supabase keys, and its network blocks `api.twelvedata.com` and `*.supabase.co`/`supabase.com`. P1-T1 to P1-T8 can be built and fully tested without them. For P1-T9, either:
-   - (a) run the P1-T9 steps on your own machine after creating the Supabase project and `.env.local`, or
-   - (b) add the keys as environment secrets and allow `api.twelvedata.com` and your `<project-ref>.supabase.co` host for this environment.
-
-   Which do you prefer? The Vercel link (step 10) needs you either way.
+None block the build or the proof. Tom steps 1–2 (your own account; Vercel env var) are listed under "Orchestrator steps".
 
 Decisions taken in this plan. Flag any you disagree with; none need an answer to proceed:
-- All four tables are created now, so no schema change is needed in Phase 2–4.
-- Daily bars are stored as `date 00:00Z`. The in-progress US-session bar is never cached, so charts update after 18:00 New York time (about noon NZ).
-- The env vars are `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SECRET_KEY`, not "anon/service role".
-- **Test-data deletion ("ask before deleting data" rule):** the opt-in Supabase integration test (P1-T5, run in P1-T9 step 2) deletes only the rows it created itself (`symbol like 'ZZTEST%'` in `candles` and `fetch_log`). Nothing else is ever deleted. If you'd rather it didn't delete at all, say so and the cleanup will be dropped; the test rows would then stay in the tables.
-
----
-
-## Review round 1 fixes
-
-**Required**
-1. **P1-T4: initial backfill relied on unverified `order=asc` + `outputsize=5000` behaviour.** Fixed:
-   - The request no longer sends `order`; it uses Twelve Data's default `desc`, so the backfill gets the latest 5000 bars. Step (d) already sorts ascending and de-dupes locally.
-   - New T4 tests:
-     - the URL has no `order` param, and the exact param set is checked for both the backfill and incremental requests;
-     - the fixture is newest-first, and the result is asserted to come back ascending.
-   - Verified facts now record that `order` is never sent, and why.
-   - The T9 step 6 check (`max(ts)` = expected latest trading date) is unchanged.
-
-**Optional points**
-| Point | Applied? | How |
-|---|---|---|
-| T2/T5 `process.env` grep contradiction | Yes | The T2 grep now excludes `*.test.ts(x)` and states it applies to non-test source only |
-| T6 negative cache for unknown tickers | No (noted) | Added to T6 Risks as deferred; the budget guard already caps the cost |
-| T6 guard not atomic across symbols and instances | Yes (note) | Added to T6 Risks: at most 1–2 credits overshoot, Twelve Data's 429 is still handled, accepted for a single user |
-| T4 400 mapping too broad | Yes | `not_found` now only when the message matches `/symbol/i`; new test: "Invalid interval provided" → `bad_response` |
-| T8 `generateMetadata` null symbol | Yes | Falls back to the title "Chart – Market Charter" |
-| T5/T9 ZZTEST deletion awareness | Yes | Added under "Decisions taken" in Open questions, with the option to drop the cleanup |
-| T6 case 10 microtask ordering | Yes | In-process de-dupe moved to the very start of `getChartCandles` (synchronous, before any await) and keyed on the whole call |
+1. **Email + password login, not magic link.**
+   - Supabase's built-in mailer only sends to org team members at about 2 emails/hour, and a custom SMTP service would be a new service.
+   - Password login needs no email. Sign-ups are switched off, and you create your account in the dashboard.
+   - Magic link can be added later if you want it.
+2. **The whole app is behind login, including the chart and `/api/candles`.** This stops strangers spending the shared Twelve Data budget.
+3. **The sidebar's "last price" is the last completed daily close** (dated), and "day % change" is that close against the previous close. Both come from the Supabase cache. The `/quote` endpoint (1 credit per ticker per view) is not used.
+4. **The sidebar automatically refreshes stale or cold tickers**, one at a time, every 10 s at most (≤ 6 credits/min). It stops with a message on any rate limit.
+5. **Watchlist cap: 30 tickers.**
+6. **`symbol_search` calls are logged in `fetch_log` with `interval = 'symbol_search'`.** The column is free text, so there's no schema change.
+7. **Test user:** an E2E login `e2e@example.com` (password only in `.env.local`) is created for the Playwright proof and left in place with its 2 watchlist rows. It can't see your rows (RLS). Delete it in the dashboard whenever you like. We won't delete it without your OK, per the data-deletion rule.
