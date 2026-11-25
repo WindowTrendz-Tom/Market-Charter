@@ -4,11 +4,14 @@ import type { CandlesResponse, ErrorResponse } from "@/lib/candles/api-types";
 import { ConfigError } from "@/lib/env";
 import { GET } from "./route";
 
+vi.mock("@/lib/auth/session", () => ({ getAuthContext: vi.fn() }));
 vi.mock("@/lib/candles/get-chart-candles", () => ({ getChartCandles: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createSupabaseAdminClient: vi.fn(() => ({})) }));
 vi.mock("@/lib/cache/supabase-candle-store", () => ({ createSupabaseCandleStore: vi.fn(() => ({ fake: "store" })) }));
 vi.mock("@/lib/data-provider", () => ({ getDataProvider: vi.fn(() => ({ fake: "provider" })) }));
 
+const { getAuthContext } = await import("@/lib/auth/session");
+const auth = vi.mocked(getAuthContext);
 const { getChartCandles } = await import("@/lib/candles/get-chart-candles");
 const { getDataProvider } = await import("@/lib/data-provider");
 const service = vi.mocked(getChartCandles);
@@ -24,6 +27,8 @@ function call(symbol: string, query = "") {
 
 beforeEach(() => {
   service.mockReset();
+  auth.mockReset();
+  auth.mockResolvedValue({ supabase: {} as never, user: { id: "u1", email: null } });
   providerFactory.mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -45,6 +50,26 @@ describe("GET /api/candles/[symbol]", () => {
       stale: false,
       notice: null,
     });
+  });
+
+  it("returns 401 without a user and never calls the service", async () => {
+    auth.mockResolvedValue({ supabase: {} as never, user: null });
+    const res = await call("AAPL");
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(((await res.json()) as ErrorResponse).error.code).toBe("unauthorized");
+    expect(service).not.toHaveBeenCalled();
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 config when auth setup is missing env, without naming variables", async () => {
+    auth.mockRejectedValue(new ConfigError(["NEXT_PUBLIC_SUPABASE_URL"]));
+    const res = await call("AAPL");
+    const text = await res.text();
+    expect(res.status).toBe(500);
+    expect((JSON.parse(text) as ErrorResponse).error.code).toBe("config");
+    expect(text).not.toContain("NEXT_PUBLIC_SUPABASE_URL");
+    expect(service).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid symbol without calling the service", async () => {

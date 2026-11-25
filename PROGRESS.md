@@ -215,3 +215,30 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 ### P2-T1 fix round 1
 - `lib/auth/next-path.ts`: `safeNextPath` now returns `/` for any control character (U+0000-U+001F, U+007F), closing the open redirect via `/\t/evil.com` (URL parsers strip tab/CR/LF). Tests added for tab, LF, CR and DEL.
 - Optional items also done: comment in `lib/supabase/server.ts` on the ignored `headers` argument; console spy restored in `afterEach` (`vi.restoreAllMocks()`) in `lib/supabase/proxy.test.ts`.
+
+### P2-T2 – Login, logout, protected app shell, auth on the candles route (awaiting review)
+
+**What changed**
+- New: `app/login/{page,login-form,actions}.ts(x)` (email + password via `signInWithPassword`, `redirect(next)` outside any try), `app/(app)/layout.tsx` (auth check, header with email and Log out, sidebar placeholder), `app/(app)/actions.ts` (`signOut`), `lib/auth/sign-in-error.ts`, `lib/http/json.ts`, `lib/http/fetch-with-auth-retry.ts` (each with tests).
+- Moved with `git mv`: `app/page.tsx` and `app/chart/[symbol]/page.tsx` into `app/(app)/`.
+- Candles route: `getAuthContext()` first inside the outer try; ConfigError gives 500 `config` (names logged only), no user gives 401 `unauthorized`; then symbol and interval validation as before. Uses `errorJson`, `jsonNoStore`, `invalidSymbolMessage`.
+- `lib/candles/api-types.ts`: `ErrorCode` extended. `lib/symbol.ts`: `invalidSymbolMessage` (+ test).
+- `components/chart-view.tsx`: `fetchWithAuthRetry`; final 401 shows the "session has expired" box with a login link carrying `next`.
+- `app/globals.css`: removed duplicate first `footer` block, `main` max-width 1400px, app-shell/header/sidebar/content/muted/login-form styles and the 800px breakpoint.
+
+**Proof**
+- `npx tsc --noEmit` clean (after clearing stale git-ignored `.next` types from the old page paths); `npm run lint` clean; `npm test`: 20 files passed, 1 skipped; 146 passed, 10 skipped (route test now 10 cases: 8 old + 401 + auth ConfigError); `npm run build` passes: routes `/`, `/chart/[symbol]`, `/login`, `/api/candles/[symbol]`, `ƒ Proxy (Middleware)`.
+- `git status`: both page files show as renames (R).
+- Dev server, logged out: `/api/candles/AAPL` -> 401; `/` -> 307 to `http://localhost:3000/login`; `/login` -> 200 containing "Log in" and the password input.
+- `grep -rn signUp app lib components` -> no output.
+- A real login was not exercised (planned for T9 after O2).
+
+**API credits used:** 0.
+
+**Issues / notes**
+- React SSR emits the attribute as `autoComplete="current-password"` (camelCase) in the HTML; HTML attribute names are case-insensitive, so browsers treat it as `autocomplete`. The plan's literal-lowercase grep will not match.
+- Existing "invalid symbol" and "invalid interval" route cases now also pass through auth first (mocked as logged in), as the plan specifies.
+
+### P2-T2 fix round 1
+- `lib/auth/sign-in-error.ts`: a missing or zero status (auth-js `AuthRetryableFetchError` reports `status: 0` on network failure) now maps to "Couldn't reach the login service. Try again shortly." (`!status || status >= 500`). Test added for `signInErrorMessage(0)`.
+- Optional items not actioned (not blocking).

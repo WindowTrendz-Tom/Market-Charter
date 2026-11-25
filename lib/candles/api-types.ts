@@ -27,7 +27,14 @@ export type ErrorCode =
   | "provider_unavailable"
   | "provider_error"
   | "cache_unavailable"
-  | "config";
+  | "config"
+  | "unauthorized"
+  | "invalid_body"
+  | "duplicate"
+  | "watchlist_full"
+  | "not_us"
+  | "not_in_watchlist"
+  | "order_mismatch";
 
 export interface CandlesResponse {
   symbol: string;

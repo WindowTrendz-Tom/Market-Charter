@@ -4,3 +4,7 @@ export function normaliseSymbol(raw: string): string | null {
   const symbol = raw.trim().toUpperCase();
   return SYMBOL_PATTERN.test(symbol) ? symbol : null;
 }
+
+export function invalidSymbolMessage(raw: string): string {
+  return `"${raw.slice(0, 20)}" isn't a valid ticker. Use 1–10 letters, digits, '.' or '-', e.g. AAPL.`;
+}

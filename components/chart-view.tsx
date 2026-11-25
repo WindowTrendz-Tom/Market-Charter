@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchWithAuthRetry } from "@/lib/http/fetch-with-auth-retry";
 import type { CandlesResponse, ErrorResponse } from "@/lib/candles/api-types";
 import { formatNzDate } from "@/lib/time/display";
 import { CandleChart } from "./candle-chart";
@@ -8,6 +9,7 @@ import { CandleChart } from "./candle-chart";
 type ViewState =
   | { kind: "loading" }
   | { kind: "ready"; data: CandlesResponse }
+  | { kind: "login"; symbol: string }
   | { kind: "error"; message: string };
 
 const MAX_BUSY_RETRIES = 3;
@@ -29,7 +31,7 @@ async function loadCandles(symbol: string, isCancelled: () => boolean): Promise<
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     try {
-      res = await fetch(url);
+      res = await fetchWithAuthRetry(url);
     } catch {
       return { kind: "error", message: "Couldn't reach the server." };
     }
@@ -44,6 +46,7 @@ async function loadCandles(symbol: string, isCancelled: () => boolean): Promise<
         return { kind: "error", message: `Something went wrong loading ${symbol}.` };
       }
     }
+    if (res.status === 401) return { kind: "login", symbol };
     const error = await readErrorBody(res);
     if (res.status === 503 && error?.code === "busy" && attempt < MAX_BUSY_RETRIES) {
       const retryAfter = Number(res.headers.get("Retry-After") ?? DEFAULT_RETRY_SECONDS);
@@ -71,6 +74,14 @@ export function ChartView({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   if (state.kind === "loading") return <p>Loading {symbol}…</p>;
+  if (state.kind === "login") {
+    return (
+      <div className="error" role="alert">
+        Your session has expired.{" "}
+        <a href={`/login?next=${encodeURIComponent(`/chart/${state.symbol}`)}`}>Log in again</a>.
+      </div>
+    );
+  }
   if (state.kind === "error") {
     return (
       <div className="error" role="alert">
