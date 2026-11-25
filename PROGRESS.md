@@ -388,3 +388,33 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 ### O2 / O3 – Test user and auth lock-down (orchestrator, before P2-T9)
 - O2: created confirmed test user `e2e@example.com` via Auth admin API (random 24-char password). `E2E_USER_EMAIL` / `E2E_USER_PASSWORD` stored in `.env.local` only (never printed or committed).
 - O3: auth config PATCHed → disable_signup=true, password_min_length=12, email provider on, anonymous off (read back from the API).
+
+### P2-T9 – Live acceptance proof (awaiting review)
+
+Run 2026-11-25 04:25-04:31 UTC (well before the 23:00 UTC cutoff), `npm start` on :3000 against the new Sydney project, Node with `NODE_USE_ENV_PROXY=1`. No code changed. Playwright script lived in the session scratchpad (not committed).
+
+**Credit baseline:** `fetch_log` day total 1 row / 1 credit (the Vercel AAPL backfill). Earlier spend today not in `fetch_log`: 5 (6 reported by the orchestrator, minus that 1 row).
+
+1. `RUN_SUPABASE_TESTS=1 npm test` (env from `.env.local`): 32 files passed, 327 tests passed, 0 skipped (includes the real-database `getRecentCandles` case). `npm run lint` clean; `npm run build` passes (routes `/`, `/chart/[symbol]`, `/login`, `/api/candles/[symbol]`, `/api/watchlist`, `/api/watchlist/refresh`). 0 credits.
+2. Logged out (curl): `/` 307 -> `/login`; `/chart/AAPL` 307 -> `/login?next=%2Fchart%2FAAPL`; `/api/candles/AAPL` 401 JSON `unauthorized`; `/api/watchlist` 401; `POST /api/watchlist/refresh` 401 JSON; `/login` 200. `fetch_log` count unchanged (1).
+3. Sign-up: `POST /auth/v1/signup` -> HTTP 422 `{"error_code":"signup_disabled","msg":"Signups not allowed for this instance"}`. SQL: 0 rows for `stranger@example.com` in `auth.users`.
+4. Login (desktop 1280x800, DPR 2): wrong password -> alert "Email or password is incorrect." (`docs/evidence/p2-t9-login-error.png`). Right credentials -> `/`, header shows `e2e@example.com`, sidebar "No tickers yet. Add one above, e.g. AAPL." Opened `/chart/AAPL`: 7 canvases, "Last candle: 24 Nov 2026 · Source: Supabase cache" (`p2-t9-chart-aapl.png`). **Differs from plan:** AAPL was already cached and fresh (Vercel backfill), so no backfill and 0 credits here, not "just fetched". Candles for AAPL 1day: 5000. The fetch_log still held only the one ok row.
+5. Adds (step-start 04:28:26 UTC, 20 s pacing): AAPL row showed 354.07, +1.43%, 24 Nov 2026 straight away, no "Not loaded yet". MSFT showed "Not loaded yet" and "Updating prices… (0 of 1)", then 496.13 +0.74% about 4 s later. NVDA the same, then 155.38 -5.86%. `fetch_log` after step-start, in order: `AAPL symbol_search ok 1`, `MSFT symbol_search ok 1`, `MSFT 1day ok 1`, `NVDA symbol_search ok 1`, `NVDA 1day ok 1`; no `AAPL 1day` row. Candles 1day: AAPL 5000, MSFT 5000, NVDA 5000.
+6. Rejects: `ZZZZQX` -> alert `No US-listed ticker "ZZZZQX" was found at Twelve Data.`; row `ZZZZQX symbol_search not_found 1`, message "no matches" (Twelve Data returned no matches at all, so there was no match list to summarise). `AAPL` again -> "AAPL is already in your watchlist.", no new row. `a;b` -> `"a;b" isn't a valid ticker. Use 1–10 letters, digits, '.' or '-', e.g. AAPL.`, no row. Screenshot `p2-t9-sidebar-desktop.png`.
+7. Sidebar vs cache (last two daily closes, prev 23 Nov, last 24 Nov): AAPL 349.079987 -> 354.070007 = +1.43%; MSFT 492.5 -> 496.13 = +0.74%; NVDA 165.050003 -> 155.38 = -5.86%. Displayed 354.07 / 496.13 / 155.38 and +1.43% / +0.74% / -5.86%, all dated 24 Nov 2026. Match.
+8. Reorder: Move NVDA up twice -> NVDA, AAPL, MSFT; same after reload. SQL `sort_order`: NVDA 0, AAPL 1, MSFT 2 (checked after remove too, see below). All `user_id` = e2e user id (true).
+9. Remove MSFT: gone, still gone after reload; SQL 2 rows: NVDA 0, AAPL 1.
+10. Cache-only: `fetch_log` 7 rows before and 7 after 3 reloads of `/` plus opening `/chart/AAPL` from the sidebar. Chart showed "Source: Supabase cache". Browser requests: `/`, `/api/watchlist`, `/chart/*?_rsc` prefetches, `/api/candles/AAPL`, `/_next/…`; external requests: none.
+11. RLS: anon `GET /rest/v1/watchlist` (no JWT) -> HTTP 401, `42501 permission denied for table watchlist`, no rows. `pg_class.relrowsecurity` true for `watchlist`, `candles`, `fetch_log`, `indicator_prefs`.
+12. Phone 390x844 (DPR 2, mobile): sidebar renders above the page content (`p2-t9-sidebar-phone.png`, checked by eye; my bounding-box check used the wrong `main` element and is not valid).
+13. Logout: "Log out" -> `/login`; `/chart/AAPL` -> `/login?next=%2Fchart%2FAAPL`.
+14. Credits: `fetch_log` day total 7 rows / 7 credits. Phase 2 spend in this task: 6 (4 searches AAPL, MSFT, NVDA, ZZZZQX + MSFT and NVDA backfills). Plan expected 7 but AAPL was already cached. Plus the 1 Vercel row plus 5 earlier unlogged = 12 today by our count (orchestrator said 6 before this task, so 12 total). Peak per minute: 3 (04:28), then 2, 1. Within the cap of 4 per minute and 15 per task.
+
+**API credits used:** 6.
+
+**Left in place:** test user `e2e@example.com`, watchlist rows NVDA (0) and AAPL (1), all candle and `fetch_log` rows. Evidence files: `docs/evidence/p2-t9-login-error.png`, `p2-t9-chart-aapl.png`, `p2-t9-sidebar-desktop.png`, `p2-t9-sidebar-phone.png`.
+
+**Notes / concerns**
+- Phase 2 acceptance: login and gate, add/remove/reorder with validated ticker (including rejected ticker), sidebar price and day % from cache are all proven.
+- Desktop screenshot was taken before the reorder, so it shows AAPL, MSFT, NVDA. The phone shot shows the final order.
+- The 5 earlier unlogged credits are invisible to the budget guard (known limitation).
