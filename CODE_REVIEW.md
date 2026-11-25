@@ -1,16 +1,20 @@
 VERDICT: APPROVED
 
-P1-T2, round 1.
+Task P1-T3, round 1.
 
-Checks run:
-- `npm run build`, `npm run lint` and `npm test` all pass (2 files, 9 tests). `npx tsc --noEmit` is clean.
-- The migration SQL matches the PLAN.md SQL.
-- `database.types.ts` matches the planned shape.
-- `lib/env.ts` and `lib/supabase/admin.ts` both import `server-only`. Neither reads env at import time.
-- The process.env grep returns nothing.
-- PROGRESS.md has a P1-T2 entry with the PG16 validation output: MIGRATION_OK, the duplicate pending-lease error, anon permission denied, RLS true on all 4 tables, and the cross-user RLS violation.
-- There are no secrets in the changes and no stray `any`.
-- Scope is held to the planned files. README "Database setup" is filled in.
+Checks run: `npm run build`, `npm run lint` and `npm test` all pass (5 files, 27 tests).
+
+Findings:
+- Stale rule in `lib/time/market-calendar.ts` matches the PLAN.md "Stale rule" section.
+  - The 18:00 cutoff is inclusive and uses minute-level comparison.
+  - Weekends step back to Friday, including after 18:00 on Sunday.
+  - Offsets come from `Intl.formatToParts`, with no hard-coded -4/-5.
+  - `zonedDateTimeToUtc` is two-pass. 18:00 never falls in the 02:00 DST gap, so the Oct/Nov/Mar cutoff cases are correct.
+  - `isDailyCacheFresh` implements clauses (a) and (b) as specified.
+- Storage stays in UTC (`dateToDailyTs`, `dailyTsToDate` accept `+00:00`). Display is fixed to Pacific/Auckland with en-NZ. This matches the plan.
+- `normaliseSymbol` regex matches the plan.
+- No scope creep. Only the planned files plus the PROGRESS.md update.
 
 Optional:
-- The T1 and T2 PROGRESS headings still say "awaiting code review". Update them when committing.
+- Unlike the other two files, `symbol.test.ts` was not checked case by case against the plan list.
+- `nzTickMarkLabel` uses `default` for tick types 3 and 4. This is fine.

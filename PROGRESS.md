@@ -48,3 +48,17 @@
 **API credits used:** 0
 
 **Issues:** none. `admin.ts` is not yet type-checked against a real project; `next build` type-checks it only if imported (it is not yet imported by a route), and vitest does not type-check. `npx tsc --noEmit` passes (checked separately).
+
+### P1-T3 – Market calendar, NZ display formatters, symbol validation (built, awaiting code review)
+
+**What changed**
+- `lib/time/market-calendar.ts` (+ test): `zonedParts`, `zonedDateTimeToUtc` (two-pass offset, no hard-coded offsets), `addDays`, `dayOfWeek`, `expectedLatestDailyCandleDate`, `dailyCutoffInstant`, `isDailyCacheFresh`, `dateToDailyTs`, `dailyTsToDate`.
+- `lib/time/display.ts` (+ test): `formatNzDate`, `formatNzDateTime`, `nzTickMarkLabel` (Pacific/Auckland, en-NZ).
+- `lib/symbol.ts` (+ test): `normaliseSymbol`.
+
+**Proof**
+- `npm run build`, `npm run lint` pass; `npx tsc --noEmit` passes; `npm test`: 5 files, 27 tests passed. All plan cases covered (expected-date instants, DST cutoffs for Oct/Nov/Mar 2026, Thanksgiving freshness, NZ labels, symbol accept/reject).
+
+**API credits used:** 0
+
+**Issues:** none. Display tests compare after normalising whitespace, as the plan allows.
