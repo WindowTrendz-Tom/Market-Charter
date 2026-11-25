@@ -139,3 +139,24 @@
 **API credits used:** 0
 
 **Issues:** none.
+
+### P1-T8 – Chart page (v5 API), NZ-time labels, footer attribution (built, awaiting code review)
+
+**What changed**
+- `lib/chart/to-chart-data.ts` (+ test): sorted, de-duped (first bar per time wins) `CandlestickData<UTCTimestamp>[]`, type-only imports.
+- `components/site-footer.tsx` (+ test), added to `app/layout.tsx` after `<main>`; small footer style in `app/globals.css`.
+- `components/candle-chart.tsx`: client component, v5 `chart.addSeries(CandlestickSeries, {}, 0)`, NZ `timeFormatter` and `tickMarkFormatter`, `attributionLogo: true`, `chart.remove()` on cleanup.
+- `components/chart-view.tsx`: loading / ready / error state; busy 503 retry (max 3, honours `Retry-After`); setState only after an await; unparsable body, network failure and empty candles give the plan's messages.
+- `app/chart/[symbol]/page.tsx`: awaits `params`, `normaliseSymbol` then `notFound()`; `generateMetadata` never throws.
+
+**Proof**
+- `npm run build` passes, lists `ƒ /chart/[symbol]`; `npm run lint` clean; `npx tsc --noEmit` clean; `npm test`: 12 files passed, 1 skipped; 98 passed, 10 skipped (3 new).
+- Secret-leak check (dummy values): `LEAK_CHECK_OK`.
+- v5 grep: no `add*Series(` matches in app/components/lib; `addSeries(CandlestickSeries` appears once (`components/candle-chart.tsx:28`).
+- Dev server with the three env vars unset (`.env.local` moved aside during the check, then restored): `/chart/AAPL` HTML contains "TradingView Lightweight Charts" (count 1) and `<h1>AAPL`; `/api/candles/AAPL` returns 500 `{"error":{"code":"config","message":"Server configuration is incomplete."}}`; `/chart/%3B` returns 404.
+
+**API credits used:** 0 (no provider or Supabase calls; the route failed on config before any call).
+
+**Issues / notes**
+- The "Loading AAPL…" text and the red error box are client-rendered after hydration, so they were not checked by curl; the loading text is in the SSR HTML only split by React comment markers. The error-box path was not seen in a browser (no browser here); it is covered by code reading only.
+- Components have no render tests beyond the footer (plan only asked for that).
