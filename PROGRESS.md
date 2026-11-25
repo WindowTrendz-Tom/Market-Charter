@@ -327,3 +327,22 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 - Reorder validation reads "each passing `normaliseSymbol` to the same value" as `normaliseSymbol(s) === s`, so a lower-case or padded symbol (`"bada"`) is a 400 `invalid_body`. The client always sends the symbols it got from `GET /api/watchlist`, which are already normalised.
 - Plan case 11 (`[C,A,B]` from `[A,B,C]`): with sort orders 0,1,2 every row changes, so "only the changed rows" is proved by seeding A=1, B=2, C=5 (only C is updated); the 0,1,2 case is a separate test (all three updated).
 - No opt-in Supabase integration test for the watchlist store in this task (the plan has none; it needs a real user session, which arrives with O2 / P2-T9).
+
+### P2-T7 – Watchlist API routes (awaiting review)
+
+**What changed**
+- New `lib/watchlist/deps.ts` (`server-only`): `buildWatchlistDeps(supabase)` = user-scoped watchlist store + admin-client candle store + `getDataProvider()`. May throw `ConfigError`.
+- New `app/api/watchlist/route.ts`: `GET` (list), `POST {symbol}` (201), `DELETE ?symbol=` (204, no body), `PATCH {symbols}` (saves, then re-lists). `force-dynamic`, all responses `no-store`.
+- New `app/api/watchlist/refresh/route.ts`: `POST {symbol}` returns `{ item, source, notice }`; failures (including `ChartCandlesFailure`) map through `errorJson` with `Retry-After`.
+- New `lib/watchlist/route-handler.ts` (not listed in the plan): shared flow used by every handler, so the common flow isn't copy-pasted five times. `withWatchlistDeps` (auth -> 401, deps, `ConfigError` -> 500 `config` with names logged only, other throw -> generic 500 `provider_error`, message only logged), `readJsonObject`, `invalidBodyJson`, `failureJson`.
+- Tests: `app/api/watchlist/route.test.ts` (15 cases incl. per-method 401) and `app/api/watchlist/refresh/route.test.ts` (6). Mocks: session, deps, service.
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm test`: 29 files passed, 1 skipped; 282 passed, 11 skipped (was 257; +25); `npm run build` lists `ƒ /api/watchlist` and `ƒ /api/watchlist/refresh`.
+- Dev server, logged out: `GET /api/watchlist` -> 401; `POST /api/watchlist/refresh` -> 401.
+
+**API credits used:** 0.
+
+**Issues / notes**
+- The extra file `route-handler.ts` is the only deviation from the plan's file list; behaviour matches the plan's common flow.
+- `deps.ts` uses the admin client for the candle cache only, as the plan specifies. The T6 grep (`lib/watchlist`) now hits `deps.ts` for that reason; the service and store files still never use it.
