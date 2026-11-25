@@ -260,3 +260,28 @@ candles=true, fetch_log=true, indicator_prefs=true, watchlist=true (4 rows, all 
 
 **Issues / notes**
 - The final "unexpected response" `bad_response` in `getCandles` (HTTP 200, body not `status: ok` with `values`) no longer carries `httpStatus`, because the status is not returned from `requestJson`. Nothing reads `httpStatus` today.
+
+### P2-T4 – Shared credit budget + logged, guarded US symbol check (awaiting review)
+
+**What changed**
+- New `lib/candles/messages.ts`: `LIMIT_MESSAGES` (`minute`, `day`, `provider`) and `CACHE_UNAVAILABLE_MESSAGE`, text moved verbatim from `get-chart-candles.ts`.
+- New `lib/candles/credit-budget.ts`: `checkCreditBudget(store, now)` (minute sum >= 8 gives `{minute, 60}`, day sum since UTC midnight >= 800 gives `{day, secondsUntilNextUtcMidnight}`), plus exported `startOfUtcDay` and `secondsUntilNextUtcMidnight` (moved).
+- New `lib/cache/complete-lease.ts`: `completeLeaseBestEffort` moved from `get-chart-candles.ts`, same body.
+- `lib/candles/limits.ts`: `MAX_LOG_MESSAGE_LENGTH = 500` (local constant removed from the candle service).
+- `lib/candles/get-chart-candles.ts`: uses `checkCreditBudget`, `completeLeaseBestEffort`, `LIMIT_MESSAGES`, `CACHE_UNAVAILABLE_MESSAGE`. No behaviour change.
+- `lib/cache/candle-store.ts`: `LogInterval = Interval | "symbol_search"`; `acquireFetchLease` takes `LogInterval`. No other signature changes; the Supabase store compiles unchanged.
+- `test/helpers/memory-candle-store.ts`: `MemoryLogRow.interval` and `acquireFetchLease` use `LogInterval`.
+- New `lib/symbols/check-us-symbol.ts` (`server-only`): `checkUsSymbol(symbol, { store, provider, now? })`: budget guard (429, no row) -> lease on (symbol, `symbol_search`) (503 busy) -> `provider.searchSymbols` (provider errors mapped as per the plan; `not_found` treated as no matches) -> `pickUsListing` (`ok` / 422 `not_us` / 404 `not_found`, match summary logged). Every completed lease logs 1 credit, `candlesReceived: null`, message cut to 500. `StoreError` anywhere gives 503 `cache_unavailable`.
+- New tests: `lib/candles/credit-budget.test.ts` (7), `lib/symbols/check-us-symbol.test.ts` (18: all 11 plan cases, case 9 split per error kind, plus empty result, message cut to 500, non-provider error rethrown, failed lease completion).
+
+**Proof**
+- `npx tsc --noEmit` clean; `npm run lint` clean; `npm test`: 23 files passed, 1 skipped; 190 passed, 10 skipped (was 165; +7 budget, +18 symbol check); `npm run build` passes (same routes as T3).
+- `lib/candles/get-chart-candles.test.ts`: 27/27 pass; `test/memory-candle-store.test.ts` (store contract): 12/12 pass. Both files and `test/helpers/candle-store-contract.ts` unchanged (`git status` shows no change; blob hashes identical before and after).
+- `grep -n "sumCreditsSince" lib/candles/get-chart-candles.ts` -> no output.
+- `grep -rn "Twelve Data's free-plan limit" lib` -> 1 hit in source (`lib/candles/messages.ts`), plus 2 expected-string hits in the unchanged `get-chart-candles.test.ts` (that file must not be edited, so the hits stay).
+- `.env.example` unchanged (no new env vars).
+
+**API credits used:** 0 (FakeProvider + MemoryCandleStore only).
+
+**Issues / notes**
+- The `fetch_log` log-row interval for searches is the literal `"symbol_search"` (constant `SEARCH_LOG_INTERVAL` in `check-us-symbol.ts`). `getLastOkFetchAt` still takes `Interval` only, as the plan says, so search rows can't be read back through it.

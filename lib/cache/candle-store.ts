@@ -1,5 +1,8 @@
 import type { Candle, Interval } from "@/lib/data-provider/types";
 
+/** fetch_log."interval": a candle interval, or the kind of non-candle call (e.g. a ticker search). */
+export type LogInterval = Interval | "symbol_search";
+
 export type FetchFinalStatus = "ok" | "rate_limited" | "not_found" | "error";
 
 export interface FetchCompletion {
@@ -20,7 +23,7 @@ export interface CandleStore {
   /** Credits logged since `since`, across all symbols. */
   sumCreditsSince(since: Date): Promise<number>;
   /** Returns the fetch_log id, or null if another pending lease exists for the series. */
-  acquireFetchLease(symbol: string, interval: Interval, now: Date): Promise<number | null>;
+  acquireFetchLease(symbol: string, interval: LogInterval, now: Date): Promise<number | null>;
   completeFetchLease(id: number, completion: FetchCompletion, now: Date): Promise<void>;
 }
 

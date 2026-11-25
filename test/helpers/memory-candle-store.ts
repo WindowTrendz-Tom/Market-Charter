@@ -3,13 +3,14 @@ import {
   StoreError,
   type CandleStore,
   type FetchCompletion,
+  type LogInterval,
 } from "@/lib/cache/candle-store";
 import type { Candle, Interval } from "@/lib/data-provider/types";
 
 export interface MemoryLogRow {
   id: number;
   symbol: string;
-  interval: Interval;
+  interval: LogInterval;
   creditsUsed: number;
   status: "pending" | "ok" | "rate_limited" | "not_found" | "error" | "expired";
   candlesReceived: number | null;
@@ -97,7 +98,7 @@ export class MemoryCandleStore implements CandleStore {
     return this.log.filter((r) => r.createdAt >= since).reduce((sum, r) => sum + r.creditsUsed, 0);
   }
 
-  async acquireFetchLease(symbol: string, interval: Interval, now: Date) {
+  async acquireFetchLease(symbol: string, interval: LogInterval, now: Date) {
     this.enter("acquireFetchLease");
     const cutoff = now.getTime() - LEASE_TTL_MS;
     for (const r of this.log) {
